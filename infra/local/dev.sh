@@ -27,6 +27,15 @@ if [ "$DEV_HOST" = "0.0.0.0" ]; then
   WAIT_HOST="127.0.0.1"
 fi
 
+DISPLAY_HOST="$DEV_HOST"
+if [ "$DEV_HOST" = "0.0.0.0" ] || [ "$DEV_HOST" = "::" ]; then
+  LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+  if [ -z "$LAN_IP" ]; then
+    LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  fi
+  DISPLAY_HOST="${LAN_IP:-$WAIT_HOST}"
+fi
+
 API_BIND="${MENZI_API_BIND:-$DEV_HOST:8080}"
 ORCH_BIND="${MENZI_ORCHESTRATOR_BIND:-$DEV_HOST:8081}"
 PREVIEWS_BIND="${MENZI_PREVIEWS_BIND:-$DEV_HOST:8095}"
@@ -91,10 +100,10 @@ PIDS+=("$VITE_PID")
 wait_http "http://$WAIT_HOST:$VITE_PORT/" "frontend"
 
 printf '\nmenzi dev stack running\n'
-printf '  control plane  http://%s\n' "${API_BIND/0.0.0.0/127.0.0.1}"
-printf '  orchestrator   http://%s\n' "${ORCH_BIND/0.0.0.0/127.0.0.1}"
-printf '  previews       http://%s\n' "${PREVIEWS_BIND/0.0.0.0/127.0.0.1}"
-printf '  frontend       http://%s:%s\n' "$WAIT_HOST" "$VITE_PORT"
+printf '  control plane  http://%s\n' "${API_BIND/0.0.0.0/$DISPLAY_HOST}"
+printf '  orchestrator   http://%s\n' "${ORCH_BIND/0.0.0.0/$DISPLAY_HOST}"
+printf '  previews       http://%s\n' "${PREVIEWS_BIND/0.0.0.0/$DISPLAY_HOST}"
+printf '  frontend       http://%s:%s\n' "$DISPLAY_HOST" "$VITE_PORT"
 printf '  logs           %s\n' "$LOG_DIR"
 
 if [ "$OPEN" = "1" ]; then
