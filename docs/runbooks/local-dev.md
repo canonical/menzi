@@ -1,6 +1,21 @@
 # Local Dev Runbook
 
-Run Postgres and NATS locally for integration tests and service development.
+## Quick start
+
+Run Postgres, NATS and the full dev stack (control plane on `:8080`,
+orchestrator on `:8081`, previews on `:8095`, frontend on `:5173`):
+
+```sh
+infra/local/dev.sh
+```
+
+`dev.sh` is idempotent: it provisions Postgres and NATS via
+`infra/local/setup.sh`, installs frontend dependencies on first run, builds the
+backend binaries, starts the services and prints their URLs and log locations
+under `target/dev/`. Ctrl+C stops everything. Add `--open` to open the
+frontend in a browser. Override ports with `MENZI_API_BIND`,
+`MENZI_ORCHESTRATOR_BIND`, `MENZI_PREVIEWS_BIND` or `MENZI_VITE_PORT`, and the
+API the vite dev server proxies to with `MENZI_API_URL`.
 
 ## Provision
 
