@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v psql >/dev/null 2>&1; then
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq postgresql postgresql-client nats-server
+fi
+
+if ! pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
+  sudo systemctl start postgresql
+fi
+
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'menzi') THEN
+    CREATE ROLE menzi WITH LOGIN PASSWORD 'menzi' CREATEDB;
+  END IF;
+END
+$$;
+SQL
+
+if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'menzi'" | grep -q 1; then
+  sudo -u postgres createdb -O menzi menzi
+fi
+
+if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'menzi_test'" | grep -q 1; then
+  sudo -u postgres createdb -O menzi menzi_test
+fi
+
+sudo mkdir -p /var/lib/nats-server/jetstream
+sudo tee /etc/nats-server.conf >/dev/null <<'EOF'
+host: 127.0.0.1
+port: 4222
+
+jetstream {
+  store_dir: "/var/lib/nats-server/jetstream"
+  max_mem_store: 1G
+  max_file_store: 10G
+}
+EOF
+sudo chown -R nats:nats /var/lib/nats-server
+sudo systemctl enable --now nats-server
+sudo systemctl restart nats-server
