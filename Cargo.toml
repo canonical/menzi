@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/db",
+    "crates/events",
+    "crates/lxd",
+    "crates/auth",
+    "crates/core-api",
+    "crates/session-proxy",
+    "crates/orchestrator",
+    "crates/llm-gateway",
+    "crates/supervisor",
+    "crates/design-service",
+    "crates/git-integration",
+    "crates/notifications",
+    "crates/workflow",
+    "crates/previews",
+    "crates/cli",
+]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+async-nats = "0.50"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+axum = { version = "0.8", features = ["ws"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "json", "chrono", "migrate"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+async-trait = "0.1"
+tower = { version = "0.5", features = ["util"] }
+base64 = "0.22"
+config = "0.15"
+clap = { version = "4", features = ["derive"] }
+utoipa = { version = "5", features = ["axum_extras"] }
+ulid = { version = "1", features = ["serde"] }
+bytes = "1"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
