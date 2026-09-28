@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run clippy
+        run: cargo clippy --workspace -- -D warnings
+      - name: Run tests
+        run: cargo test --workspace
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+      - name: Test
+        working-directory: frontend
+        run: npm run test
+
+  deployment-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Terraform
+        run: |
+          curl -sSLO https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip
+          python3 -m zipfile -e terraform_1.9.8_linux_amd64.zip /tmp/terraform
+          sudo mv /tmp/terraform/terraform /usr/local/bin/terraform
+      - name: Terraform fmt
+        working-directory: infra/terraform
+        run: terraform fmt -check -recursive
+      - name: Terraform validate
+        working-directory: infra/terraform
+        run: |
+          terraform init -input=false -backend=false
+          terraform validate
+      - name: Juju bundle lint
+        run: ruby -ryaml -e 'YAML.load_file("infra/juju/bundle.yaml")' -e 'puts "bundle yaml ok"'
