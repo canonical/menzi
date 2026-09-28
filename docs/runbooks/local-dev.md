@@ -13,7 +13,8 @@ infra/local/dev.sh
 `infra/local/setup.sh`, installs frontend dependencies on first run, builds the
 backend binaries, starts the services and prints their URLs and log locations
 under `target/dev/`. Ctrl+C stops everything. Add `--open` to open the
-frontend in a browser. Override ports with `MENZI_API_BIND`,
+frontend in a browser. Bind all services to a specific host with
+`--host 0.0.0.0` (or `MENZI_DEV_HOST`). Override ports with `MENZI_API_BIND`,
 `MENZI_ORCHESTRATOR_BIND`, `MENZI_PREVIEWS_BIND` or `MENZI_VITE_PORT`, and the
 API the vite dev server proxies to with `MENZI_API_URL`.
 

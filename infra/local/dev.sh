@@ -10,9 +10,26 @@ fi
 
 "$ROOT/infra/local/setup.sh"
 
-API_BIND="${MENZI_API_BIND:-127.0.0.1:8080}"
-ORCH_BIND="${MENZI_ORCHESTRATOR_BIND:-127.0.0.1:8081}"
-PREVIEWS_BIND="${MENZI_PREVIEWS_BIND:-127.0.0.1:8095}"
+DEV_HOST="${MENZI_DEV_HOST:-127.0.0.1}"
+OPEN=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --open) OPEN=1 ;;
+    --host=*) DEV_HOST="${1#--host=}" ;;
+    --host) shift; DEV_HOST="${1:-$DEV_HOST}" ;;
+    *) printf 'usage: %s [--open] [--host HOST]\n' "${0##*/}" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+WAIT_HOST="$DEV_HOST"
+if [ "$DEV_HOST" = "0.0.0.0" ]; then
+  WAIT_HOST="127.0.0.1"
+fi
+
+API_BIND="${MENZI_API_BIND:-$DEV_HOST:8080}"
+ORCH_BIND="${MENZI_ORCHESTRATOR_BIND:-$DEV_HOST:8081}"
+PREVIEWS_BIND="${MENZI_PREVIEWS_BIND:-$DEV_HOST:8095}"
 VITE_PORT="${MENZI_VITE_PORT:-5173}"
 DB_URL="${MENZI_DATABASE_URL:-postgres://menzi:menzi@127.0.0.1:5432/menzi}"
 
@@ -64,24 +81,24 @@ wait_http() {
   return 1
 }
 
-wait_http "http://$API_BIND/health" "control plane"
-wait_http "http://$ORCH_BIND/api/env/status" "orchestrator"
-wait_http "http://$PREVIEWS_BIND/api/v1/previews" "previews"
+wait_http "http://${API_BIND/0.0.0.0/$WAIT_HOST}/health" "control plane"
+wait_http "http://${ORCH_BIND/0.0.0.0/$WAIT_HOST}/api/env/status" "orchestrator"
+wait_http "http://${PREVIEWS_BIND/0.0.0.0/$WAIT_HOST}/api/v1/previews" "previews"
 
-setsid env -C "$ROOT/frontend" npm run dev -- --host 127.0.0.1 --port "$VITE_PORT" >"$LOG_DIR/vite.log" 2>&1 &
+setsid env -C "$ROOT/frontend" npm run dev -- --host "$DEV_HOST" --port "$VITE_PORT" >"$LOG_DIR/vite.log" 2>&1 &
 VITE_PID=$!
 PIDS+=("$VITE_PID")
-wait_http "http://127.0.0.1:$VITE_PORT/" "frontend"
+wait_http "http://$WAIT_HOST:$VITE_PORT/" "frontend"
 
 printf '\nmenzi dev stack running\n'
-printf '  control plane  http://%s\n' "$API_BIND"
-printf '  orchestrator   http://%s\n' "$ORCH_BIND"
-printf '  previews       http://%s\n' "$PREVIEWS_BIND"
-printf '  frontend       http://127.0.0.1:%s\n' "$VITE_PORT"
+printf '  control plane  http://%s\n' "${API_BIND/0.0.0.0/127.0.0.1}"
+printf '  orchestrator   http://%s\n' "${ORCH_BIND/0.0.0.0/127.0.0.1}"
+printf '  previews       http://%s\n' "${PREVIEWS_BIND/0.0.0.0/127.0.0.1}"
+printf '  frontend       http://%s:%s\n' "$WAIT_HOST" "$VITE_PORT"
 printf '  logs           %s\n' "$LOG_DIR"
 
-if [ "${1:-}" = "--open" ]; then
-  xdg-open "http://127.0.0.1:$VITE_PORT" 2>/dev/null || true
+if [ "$OPEN" = "1" ]; then
+  xdg-open "http://$WAIT_HOST:$VITE_PORT" 2>/dev/null || true
 fi
 
 wait "$VITE_PID"
