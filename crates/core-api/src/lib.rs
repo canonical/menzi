@@ -1,0 +1,67 @@
+use axum::routing::{get, post};
+use axum::Router;
+use sqlx::PgPool;
+use utoipa::OpenApi;
+
+pub mod modules;
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        modules::health::health_check,
+        modules::orgs::list_orgs,
+        modules::orgs::create_org,
+        modules::orgs::get_org,
+    ),
+    components(
+        schemas(modules::health::HealthResponse, modules::orgs::OrgResponse, modules::orgs::CreateOrgRequest),
+    ),
+    tags(
+        (name = "health", description = "Health check endpoints"),
+        (name = "orgs", description = "Org management endpoints"),
+    )
+)]
+pub struct ApiDoc;
+
+pub fn create_router() -> Router<PgPool> {
+    Router::new()
+        .route("/health", get(modules::health::health_check))
+        .route(
+            "/api/v1/orgs",
+            get(modules::orgs::list_orgs).post(modules::orgs::create_org),
+        )
+        .route("/api/v1/orgs/{id}", get(modules::orgs::get_org))
+        .route(
+            "/api/v1/projects/{project_id}/previews",
+            get(modules::previews_proxy::forward_previews),
+        )
+        .route(
+            "/api/v1/previews",
+            post(modules::previews_proxy::forward_previews),
+        )
+        .route(
+            "/api/v1/previews/{id}",
+            get(modules::previews_proxy::forward_previews)
+                .delete(modules::previews_proxy::forward_previews),
+        )
+        .route(
+            "/api/v1/previews/{id}/reset",
+            post(modules::previews_proxy::forward_previews),
+        )
+        .route(
+            "/api/v1/previews/{id}/restart",
+            post(modules::previews_proxy::forward_previews),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_doc_generates() {
+        let doc = ApiDoc::openapi();
+        assert!(doc.paths.paths.contains_key("/health"));
+        assert!(doc.paths.paths.contains_key("/api/v1/orgs"));
+    }
+}

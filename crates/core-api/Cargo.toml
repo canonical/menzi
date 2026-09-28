@@ -1,0 +1,28 @@
+[package]
+name = "menzi-core-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+menzi-common = { path = "../common" }
+menzi-db = { path = "../db" }
+menzi-auth = { path = "../auth" }
+menzi-events = { path = "../events" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+axum.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+async-trait.workspace = true
+utoipa.workspace = true
+tower = { version = "0.5", features = ["util"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
