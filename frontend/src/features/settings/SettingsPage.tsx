@@ -1,82 +1,120 @@
-import { useState } from 'react';
+import { ChangeEvent, FormEvent, useState } from 'react';
+import {
+  Button,
+  Form,
+  Icon,
+  Input,
+  Spinner,
+  Switch,
+  Tabs,
+  useNotify,
+} from '@canonical/react-components';
+import { S } from '../../strings/catalogue';
+
+const SETTINGS_TABS = [
+  { id: 'profile', label: S.settings.tabs.profile },
+  { id: 'models', label: S.settings.tabs.modelAccounts },
+  { id: 'notifications', label: S.settings.tabs.notifications },
+];
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function SettingsPage() {
-  const [activeTab, setActiveTab] = useState('profile');
+  const [activeTab, setActiveTab] = useState(SETTINGS_TABS[0].id);
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [webPush, setWebPush] = useState(true);
+  const [emailEnabled, setEmailEnabled] = useState(false);
+  const [chat, setChat] = useState(false);
+  const notify = useNotify();
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextNameError = name.trim() ? null : S.settings.profile.errors.nameRequired;
+    const nextEmailError = EMAIL_PATTERN.test(email)
+      ? null
+      : S.settings.profile.errors.emailInvalid;
+    setNameError(nextNameError);
+    setEmailError(nextEmailError);
+    if (nextNameError || nextEmailError) return;
+    setSaving(true);
+    window.setTimeout(() => {
+      setSaving(false);
+      notify.success(S.settings.profile.saved);
+    }, 600);
+  };
 
   return (
     <div>
-      <h2 className="p-heading--3">Settings</h2>
-      <div className="p-tabs">
-        <ul className="p-tabs__list">
-          <li className="p-tabs__item">
-            <button
-              className={`p-tabs__link ${activeTab === 'profile' ? 'is-active' : ''}`}
-              onClick={() => setActiveTab('profile')}
-            >
-              Profile
-            </button>
-          </li>
-          <li className="p-tabs__item">
-            <button
-              className={`p-tabs__link ${activeTab === 'models' ? 'is-active' : ''}`}
-              onClick={() => setActiveTab('models')}
-            >
-              Model accounts
-            </button>
-          </li>
-          <li className="p-tabs__item">
-            <button
-              className={`p-tabs__link ${activeTab === 'notifications' ? 'is-active' : ''}`}
-              onClick={() => setActiveTab('notifications')}
-            >
-              Notifications
-            </button>
-          </li>
-        </ul>
-      </div>
+      <h2 className="p-heading--3">{S.settings.title}</h2>
+      <Tabs
+        links={SETTINGS_TABS.map((tab) => ({
+          label: tab.label,
+          onClick: () => setActiveTab(tab.id),
+          active: activeTab === tab.id,
+        }))}
+      />
       <div className="p-card">
         <div className="p-card__content">
           {activeTab === 'profile' && (
-            <form className="p-form">
-              <div className="p-form__group">
-                <label className="p-form__label">Name</label>
-                <input type="text" className="p-form__control" />
-              </div>
-              <div className="p-form__group">
-                <label className="p-form__label">Email</label>
-                <input type="email" className="p-form__control" />
-              </div>
-              <button type="submit" className="p-button--positive">Save</button>
-            </form>
+            <Form onSubmit={handleSubmit}>
+              <Input
+                id="settings-name"
+                label={S.settings.profile.nameLabel}
+                type="text"
+                required
+                value={name}
+                error={nameError}
+                onChange={(event) => setName(event.target.value)}
+              />
+              <Input
+                id="settings-email"
+                label={S.settings.profile.emailLabel}
+                type="email"
+                required
+                value={email}
+                error={emailError}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+              <Button disabled={saving} appearance="positive" type="submit">
+                {saving ? <Spinner text={S.dataState.loading} /> : S.settings.profile.save}
+              </Button>
+            </Form>
           )}
           {activeTab === 'models' && (
             <div>
-              <h4>Model accounts</h4>
-              <p>Add or manage your model provider accounts.</p>
-              <button className="p-button--positive">Add account</button>
+              <p>{S.settings.modelAccounts.intro}</p>
+              <Button appearance="positive">
+                <Icon name="plus" />
+                {S.settings.modelAccounts.addAccount}
+              </Button>
             </div>
           )}
           {activeTab === 'notifications' && (
             <div>
-              <h4>Notification preferences</h4>
-              <form className="p-form">
-                <div className="p-form__group">
-                  <label className="p-form__label">
-                    <input type="checkbox" /> Web push
-                  </label>
-                </div>
-                <div className="p-form__group">
-                  <label className="p-form__label">
-                    <input type="checkbox" /> Email
-                  </label>
-                </div>
-                <div className="p-form__group">
-                  <label className="p-form__label">
-                    <input type="checkbox" /> Chat
-                  </label>
-                </div>
-                <button type="submit" className="p-button--positive">Save</button>
-              </form>
+              <p>{S.settings.notifications.intro}</p>
+              <Switch
+                label={S.settings.notifications.webPush}
+                checked={webPush}
+                onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                  setWebPush(event.target.checked)
+                }
+              />
+              <Switch
+                label={S.settings.notifications.email}
+                checked={emailEnabled}
+                onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                  setEmailEnabled(event.target.checked)
+                }
+              />
+              <Switch
+                label={S.settings.notifications.chat}
+                checked={chat}
+                onChange={(event: ChangeEvent<HTMLInputElement>) => setChat(event.target.checked)}
+              />
             </div>
           )}
         </div>
