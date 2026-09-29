@@ -1,4 +1,14 @@
-import { vi } from 'vitest'
+import { afterEach, expect, vi } from 'vitest'
+import { cleanup } from '@testing-library/react'
+import '@testing-library/jest-dom/vitest'
+import * as matchers from 'vitest-axe/matchers'
+import 'vitest-axe/extend-expect'
+
+afterEach(() => {
+  cleanup()
+})
+
+expect.extend(matchers)
 
 class MemoryStorage implements Storage {
   private store = new Map<string, string>()
@@ -29,3 +39,17 @@ class MemoryStorage implements Storage {
 }
 
 vi.stubGlobal('localStorage', new MemoryStorage())
+
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: vi.fn().mockImplementation((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+})
