@@ -12,13 +12,23 @@ pub mod modules;
         modules::orgs::list_orgs,
         modules::orgs::create_org,
         modules::orgs::get_org,
+        modules::projects::list_projects,
+        modules::projects::create_project,
+        modules::projects::get_project,
     ),
     components(
-        schemas(modules::health::HealthResponse, modules::orgs::OrgResponse, modules::orgs::CreateOrgRequest),
+        schemas(
+            modules::health::HealthResponse,
+            modules::orgs::OrgResponse,
+            modules::orgs::CreateOrgRequest,
+            modules::projects::ProjectResponse,
+            modules::projects::CreateProjectRequest,
+        ),
     ),
     tags(
         (name = "health", description = "Health check endpoints"),
         (name = "orgs", description = "Org management endpoints"),
+        (name = "projects", description = "Project management endpoints"),
     )
 )]
 pub struct ApiDoc;
@@ -31,6 +41,11 @@ pub fn create_router() -> Router<PgPool> {
             get(modules::orgs::list_orgs).post(modules::orgs::create_org),
         )
         .route("/api/v1/orgs/{id}", get(modules::orgs::get_org))
+        .route(
+            "/api/v1/projects",
+            get(modules::projects::list_projects).post(modules::projects::create_project),
+        )
+        .route("/api/v1/projects/{id}", get(modules::projects::get_project))
         .route(
             "/api/v1/projects/{project_id}/previews",
             get(modules::previews_proxy::forward_previews),
