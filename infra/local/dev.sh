@@ -121,6 +121,13 @@ if [ -n "${OPENCODE_URL:-}" ]; then
   fi
 fi
 
+if [ "${MENZI_SKIP_SEED:-0}" != "1" ] && command -v psql >/dev/null 2>&1; then
+  PGPASSWORD="menzi" psql -q -h 127.0.0.1 -U menzi -d menzi -v ON_ERROR_STOP=1 \
+    -f "$ROOT/infra/local/seed.sql" >"$LOG_DIR/seed.log" 2>&1 \
+    && echo "seed data applied" \
+    || echo "warning: seed failed, see $LOG_DIR/seed.log" >&2
+fi
+
 setsid env -C "$ROOT/frontend" npm run dev -- --host "$DEV_HOST" --port "$VITE_PORT" >"$LOG_DIR/vite.log" 2>&1 &
 VITE_PID=$!
 PIDS+=("$VITE_PID")
