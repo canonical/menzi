@@ -39,6 +39,7 @@ fi
 API_BIND="${MENZI_API_BIND:-$DEV_HOST:8080}"
 ORCH_BIND="${MENZI_ORCHESTRATOR_BIND:-$DEV_HOST:8081}"
 PREVIEWS_BIND="${MENZI_PREVIEWS_BIND:-$DEV_HOST:8095}"
+OPENCODE_PORT="${MENZI_OPENCODE_PORT:-17999}"
 PROXY_BIND="${MENZI_SESSION_PROXY_BIND:-$DEV_HOST:8082}"
 LLM_BIND="${MENZI_LLM_GATEWAY_BIND:-$DEV_HOST:8083}"
 VITE_PORT="${MENZI_VITE_PORT:-5173}"
@@ -81,6 +82,8 @@ setsid env MENZI_GATEWAY_BIND="$PROXY_BIND" "$ROOT/target/debug/menzi-session-pr
 PIDS+=("$!")
 setsid env MENZI_GATEWAY_BIND="$LLM_BIND" "$ROOT/target/debug/menzi-llm-gateway" >"$LOG_DIR/llm-gateway.log" 2>&1 &
 PIDS+=("$!")
+OPENCODE_URL="${MENZI_OPENCODE_URL:-http://127.0.0.1:$OPENCODE_PORT}"
+wait_http "$OPENCODE_URL/api/model" "opencode" 60 200
 
 wait_http() {
   local url="$1" name="$2" tries="${3:-60}" want="${4:-}" code
