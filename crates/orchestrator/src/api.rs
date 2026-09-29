@@ -88,13 +88,42 @@ impl OrchestratorState {
 
 pub fn create_router(state: OrchestratorState) -> Router {
     Router::new()
-        .route("/api/env/specs", post(register_spec_handler))
+        .route("/api/env/health", get(health_handler))
+        .route("/api/env/specs", get(list_specs_handler).post(register_spec_handler))
         .route("/api/env/launch", post(launch_handler))
         .route("/api/env/relaunch", post(relaunch_handler))
         .route("/api/env/status", get(status_handler))
         .route("/api/env/exec", post(exec_handler))
         .route("/api/env/logs", post(logs_handler))
         .with_state(state)
+}
+
+async fn health_handler() -> Response {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "ok"})),
+    )
+        .into_response()
+}
+
+async fn list_specs_handler(State(state): State<OrchestratorState>) -> Response {
+    let mut names: Vec<String> = state
+        .specs
+        .lock()
+        .expect("specs lock")
+        .keys()
+        .cloned()
+        .collect();
+    names.sort();
+    (
+        StatusCode::OK,
+        Json(EnvResponse {
+            success: true,
+            message: format!("{} environment spec(s) registered", names.len()),
+            data: Some(serde_json::json!({ "specs": names })),
+        }),
+    )
+        .into_response()
 }
 
 fn lookup_spec(
@@ -649,6 +678,67 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn health_is_bodyless_and_returns_ok() {
+        let state = OrchestratorState::new(Arc::new(MockDriver::default()));
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/env/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response).await;
+        assert!(body.contains("\"status\":\"ok\""));
+    }
+
+    #[tokio::test]
+    async fn list_specs_returns_registered_names_sorted() {
+        let state = OrchestratorState::new(Arc::new(MockDriver::default()));
+        let mut zebra = dev_spec();
+        zebra.name = "zebra".to_string();
+        state.register_spec("zebra", zebra);
+        state.register_spec("dev", dev_spec());
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/env/specs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response).await;
+        assert!(body.contains("\"specs\":[\"dev\",\"zebra\"]"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn list_specs_is_empty_when_none_registered() {
+        let state = OrchestratorState::new(Arc::new(MockDriver::default()));
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/env/specs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response).await;
+        assert!(body.contains("\"specs\":[]"), "{body}");
     }
 
     #[test]
