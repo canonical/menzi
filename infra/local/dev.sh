@@ -39,6 +39,8 @@ fi
 API_BIND="${MENZI_API_BIND:-$DEV_HOST:8080}"
 ORCH_BIND="${MENZI_ORCHESTRATOR_BIND:-$DEV_HOST:8081}"
 PREVIEWS_BIND="${MENZI_PREVIEWS_BIND:-$DEV_HOST:8095}"
+PROXY_BIND="${MENZI_SESSION_PROXY_BIND:-$DEV_HOST:8082}"
+LLM_BIND="${MENZI_LLM_GATEWAY_BIND:-$DEV_HOST:8083}"
 VITE_PORT="${MENZI_VITE_PORT:-5173}"
 DB_URL="${MENZI_DATABASE_URL:-postgres://menzi:menzi@127.0.0.1:5432/menzi}"
 
@@ -49,7 +51,7 @@ if [ ! -d "$ROOT/frontend/node_modules" ]; then
   (cd "$ROOT/frontend" && npm install)
 fi
 
-cargo build -p menzi-core-api -p menzi-orchestrator -p menzi-previews
+cargo build -p menzi-core-api -p menzi-orchestrator -p menzi-previews -p menzi-session-proxy -p menzi-llm-gateway
 
 if [ -n "${MENZI_LXD_CERT_PATH:-}" ] || [ -n "${MENZI_LXD_KEY_PATH:-}" ]; then
   :
@@ -75,6 +77,10 @@ setsid env MENZI_GATEWAY_BIND="$ORCH_BIND" "$ROOT/target/debug/menzi-orchestrato
 PIDS+=("$!")
 setsid env MENZI_PREVIEWS_BIND="$PREVIEWS_BIND" "$ROOT/target/debug/menzi-previews" >"$LOG_DIR/previews.log" 2>&1 &
 PIDS+=("$!")
+setsid env MENZI_GATEWAY_BIND="$PROXY_BIND" "$ROOT/target/debug/menzi-session-proxy" >"$LOG_DIR/session-proxy.log" 2>&1 &
+PIDS+=("$!")
+setsid env MENZI_GATEWAY_BIND="$LLM_BIND" "$ROOT/target/debug/menzi-llm-gateway" >"$LOG_DIR/llm-gateway.log" 2>&1 &
+PIDS+=("$!")
 
 wait_http() {
   local url="$1" name="$2" tries="${3:-60}" code
@@ -93,6 +99,8 @@ wait_http() {
 wait_http "http://${API_BIND/0.0.0.0/$WAIT_HOST}/health" "control plane"
 wait_http "http://${ORCH_BIND/0.0.0.0/$WAIT_HOST}/api/env/status" "orchestrator"
 wait_http "http://${PREVIEWS_BIND/0.0.0.0/$WAIT_HOST}/api/v1/previews" "previews"
+wait_http "http://${PROXY_BIND/0.0.0.0/$WAIT_HOST}/health" "session proxy"
+wait_http "http://${LLM_BIND/0.0.0.0/$WAIT_HOST}/v1/models" "llm gateway"
 
 setsid env -C "$ROOT/frontend" npm run dev -- --host "$DEV_HOST" --port "$VITE_PORT" >"$LOG_DIR/vite.log" 2>&1 &
 VITE_PID=$!
@@ -103,6 +111,8 @@ printf '\nmenzi dev stack running\n'
 printf '  control plane  http://%s\n' "${API_BIND/0.0.0.0/$DISPLAY_HOST}"
 printf '  orchestrator   http://%s\n' "${ORCH_BIND/0.0.0.0/$DISPLAY_HOST}"
 printf '  previews       http://%s\n' "${PREVIEWS_BIND/0.0.0.0/$DISPLAY_HOST}"
+printf '  session proxy  http://%s\n' "${PROXY_BIND/0.0.0.0/$DISPLAY_HOST}"
+printf '  llm gateway    http://%s\n' "${LLM_BIND/0.0.0.0/$DISPLAY_HOST}"
 printf '  frontend       http://%s:%s\n' "$DISPLAY_HOST" "$VITE_PORT"
 printf '  logs           %s\n' "$LOG_DIR"
 
