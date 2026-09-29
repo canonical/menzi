@@ -1,14 +1,16 @@
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
+use futures_util::StreamExt;
 use menzi_common::ids::SessionId;
 use serde_json::json;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 
 use crate::config::ProxyConfig;
 use crate::fanout::FanoutManager;
@@ -24,10 +26,12 @@ pub struct ProxyState {
     pub archiver: Arc<Mutex<TranscriptArchiver>>,
     pub fanout: Arc<Mutex<FanoutManager>>,
     pub sequence: Arc<AtomicI64>,
+    pub events: broadcast::Sender<TunnelMessage>,
 }
 
 impl ProxyState {
     pub fn new(config: ProxyConfig, opencode_url: impl Into<String>) -> Self {
+        let (events, _) = broadcast::channel(1024);
         Self {
             http: reqwest::Client::new(),
             config,
@@ -38,14 +42,18 @@ impl ProxyState {
             ))),
             fanout: Arc::new(Mutex::new(FanoutManager::new())),
             sequence: Arc::new(AtomicI64::new(0)),
+            events,
         }
     }
 }
 
 pub fn create_router(state: ProxyState) -> Router {
     Router::new()
+        .route("/health", get(health_check))
         .route("/api/opencode/register", post(register_opencode))
         .route("/api/tunnel/register", post(register_tunnel))
+        .route("/api/tunnel/sessions", get(list_sessions))
+        .route("/api/oc/event", get(stream_upstream_event))
         .route("/api/tunnel/{session_id}/status", get(tunnel_status))
         .route("/api/tunnel/{session_id}/fanout", post(fanout_subscribe))
         .route(
@@ -53,7 +61,21 @@ pub fn create_router(state: ProxyState) -> Router {
             get(transcript_events),
         )
         .route("/api/{*rest}", any(forward))
+        .route("/{*rest}", any(forward))
         .with_state(state)
+}
+
+async fn health_check(State(state): State<ProxyState>) -> Response {
+    let opencode_url = state.opencode_url.read().await.clone();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "opencode_url": opencode_url,
+            "tunnels": state.tunnels.lock().expect("tunnels lock").tunnels.len(),
+        })),
+    )
+        .into_response()
 }
 
 async fn register_opencode(
@@ -146,18 +168,154 @@ async fn fanout_subscribe(
     (StatusCode::OK, Json(json!({"status": "subscribed"}))).into_response()
 }
 
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct TranscriptQuery {
+    pub after: Option<i64>,
+    pub follow: Option<bool>,
+}
+
+fn backlog(state: &ProxyState, session_id: &SessionId, after: i64) -> Vec<TunnelMessage> {
+    let archiver = state.archiver.lock().expect("archiver lock");
+    archiver
+        .get_events(session_id)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|message| message.sequence > after)
+        .collect()
+}
+
+fn message_type_name(message_type: MessageType) -> String {
+    serde_json::to_value(message_type)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn to_sse_event(message: &TunnelMessage) -> Result<Event, std::convert::Infallible> {
+    let data = serde_json::to_string(message).unwrap_or_else(|_| "{}".to_string());
+    Ok(Event::default()
+        .id(message.sequence.to_string())
+        .event(message_type_name(message.message_type))
+        .data(data))
+}
+
+async fn list_sessions(State(state): State<ProxyState>) -> Response {
+    let mut sessions: Vec<serde_json::Value> = {
+        let archiver = state.archiver.lock().expect("archiver lock");
+        archiver
+            .sessions
+            .iter()
+            .map(|(id, events)| {
+                serde_json::json!({
+                    "id": id.to_string(),
+                    "events_count": events.len(),
+                    "last_sequence": events.last().map(|e| e.sequence).unwrap_or(0),
+                })
+            })
+            .collect()
+    };
+    sessions.sort_by(|a, b| {
+        let left = a["last_sequence"].as_i64().unwrap_or(0);
+        let right = b["last_sequence"].as_i64().unwrap_or(0);
+        right.cmp(&left)
+    });
+    (StatusCode::OK, Json(json!({ "sessions": sessions }))).into_response()
+}
+
 async fn transcript_events(
     State(state): State<ProxyState>,
     Path(session_id): Path<SessionId>,
+    Query(query): Query<TranscriptQuery>,
 ) -> Response {
-    let events = {
-        let archiver = state.archiver.lock().expect("archiver lock");
-        archiver
-            .get_events(&session_id)
-            .cloned()
-            .unwrap_or_default()
+    let after = query.after.unwrap_or(-1);
+
+    if query.follow != Some(true) {
+        let events = backlog(&state, &session_id, after);
+        return (StatusCode::OK, Json(events)).into_response();
+    }
+
+    let receiver = state.events.subscribe();
+    let pending = backlog(&state, &session_id, after);
+    let session = session_id;
+
+    let stream = futures_util::stream::unfold(
+        (pending.into_iter(), receiver),
+        move |(mut backlog, mut receiver)| async move {
+            if let Some(message) = backlog.next() {
+                let event = to_sse_event(&message);
+                return Some((event, (backlog, receiver)));
+            }
+            loop {
+                match receiver.recv().await {
+                    Ok(message) => {
+                        if message.session_id != session {
+                            continue;
+                        }
+                        let event = to_sse_event(&message);
+                        return Some((event, (backlog, receiver)));
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return None,
+                }
+            }
+        },
+    );
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+pub fn upstream_credentials() -> Option<(String, String)> {
+    let username = std::env::var("MENZI_OPENCODE_USERNAME")
+        .ok()
+        .or_else(|| std::env::var("OPENCODE_SERVER_USERNAME").ok())?;
+    let password = std::env::var("MENZI_OPENCODE_PASSWORD")
+        .ok()
+        .or_else(|| std::env::var("OPENCODE_SERVER_PASSWORD").ok())?;
+    if username.is_empty() {
+        return None;
+    }
+    Some((username, password))
+}
+
+async fn stream_upstream_event(
+    State(state): State<ProxyState>,
+) -> Response {
+    let target = state.opencode_url.read().await.clone();
+    let url = format!("{target}/api/event");
+
+    let upstream = match state.http.get(&url).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": error.to_string()})),
+            )
+                .into_response();
+        }
     };
-    (StatusCode::OK, Json(events)).into_response()
+
+    if upstream.status() != StatusCode::OK {
+        let status = upstream.status();
+        return (status, Json(json!({"error": "upstream event stream unavailable"}))).into_response();
+    }
+
+    let stream = upstream
+        .bytes_stream()
+        .map(|item| item.map_err(|error| std::io::Error::other(error.to_string())));
+
+    let mut response = Response::new(axum::body::Body::from_stream(stream));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    response
 }
 
 async fn forward(
@@ -188,10 +346,14 @@ async fn forward(
             || name == header::CONTENT_LENGTH
             || name == header::TRANSFER_ENCODING
             || name == header::CONNECTION
+            || name == header::AUTHORIZATION
         {
             continue;
         }
         builder = builder.header(name, value);
+    }
+    if let Some(credentials) = upstream_credentials() {
+        builder = builder.basic_auth(credentials.0, Some(credentials.1));
     }
     let upstream = match builder.body(body).send().await {
         Ok(response) => response,
@@ -248,8 +410,11 @@ fn record_event(
         payload,
         sequence,
     };
-    let mut archiver = state.archiver.lock().expect("archiver lock");
-    archiver.record_event(session_id, message);
+    {
+        let mut archiver = state.archiver.lock().expect("archiver lock");
+        archiver.record_event(session_id, message.clone());
+    }
+    let _ = state.events.send(message);
 }
 
 #[cfg(test)]
@@ -258,6 +423,8 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::get;
+    
+    use std::time::Duration;
     use tower::ServiceExt;
 
     fn test_state() -> ProxyState {
@@ -503,6 +670,463 @@ mod tests {
             tunnels.get_viewer_count(&session_id)
         };
         assert_eq!(count, 1);
+    }
+
+    fn seed_events(state: &ProxyState, session_id: SessionId, count: usize) {
+        for index in 0..count {
+            record_event(
+                state,
+                session_id,
+                MessageType::Event,
+                json!({"n": index}),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn transcript_after_cursor_returns_only_newer_events() {
+        let state = test_state();
+        let session_id = SessionId::new();
+        seed_events(&state, session_id, 3);
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/tunnel/{session_id}/transcript?after=1"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response).await;
+        let events: Vec<TunnelMessage> = serde_json::from_str(&body).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events.iter().all(|event| event.sequence > 1));
+    }
+
+    #[tokio::test]
+    async fn transcript_without_cursor_returns_everything() {
+        let state = test_state();
+        let session_id = SessionId::new();
+        seed_events(&state, session_id, 3);
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/tunnel/{session_id}/transcript"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = body_string(response).await;
+        let events: Vec<TunnelMessage> = serde_json::from_str(&body).unwrap();
+        assert_eq!(events.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn transcript_follow_streams_backlog_then_live_events() {
+        let state = test_state();
+        let session_id = SessionId::new();
+        record_event(&state, session_id, MessageType::Event, json!({"n": 0}));
+        let app = create_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/tunnel/{session_id}/transcript?after=-1&follow=true"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+
+        let mut stream = response.into_body().into_data_stream();
+
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("backlog frame timed out")
+            .expect("stream closed early")
+            .expect("frame error");
+        let first = String::from_utf8_lossy(&first).to_string();
+        assert!(first.contains("id:"), "{first}");
+        assert!(first.contains("event: event"), "{first}");
+        assert!(first.contains("\"n\":0"), "{first}");
+
+        record_event(&state, session_id, MessageType::Response, json!({"n": 1}));
+
+        let second = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("live frame timed out")
+            .expect("stream closed early")
+            .expect("frame error");
+        let second = String::from_utf8_lossy(&second).to_string();
+        assert!(second.contains("event: response"), "{second}");
+        assert!(second.contains("\"n\":1"), "{second}");
+    }
+
+    #[tokio::test]
+    async fn transcript_follow_is_empty_for_unknown_session_then_streams_live() {
+        let state = test_state();
+        let session_id = SessionId::new();
+        let app = create_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/tunnel/{session_id}/transcript?follow=true"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut stream = response.into_body().into_data_stream();
+        record_event(&state, session_id, MessageType::Event, json!({"n": 7}));
+        let frame = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("live frame timed out")
+            .expect("stream closed early")
+            .expect("frame error");
+        let frame = String::from_utf8_lossy(&frame).to_string();
+        assert!(frame.contains("\"n\":7"), "{frame}");
+    }
+
+    #[tokio::test]
+    async fn transcript_follow_excludes_other_sessions() {
+        let state = test_state();
+        let wanted = SessionId::new();
+        let other = SessionId::new();
+        record_event(&state, wanted, MessageType::Event, json!({"n": 0}));
+        record_event(&state, other, MessageType::Event, json!({"n": 1}));
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/tunnel/{wanted}/transcript?after=-1"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = body_string(response).await;
+        let events: Vec<TunnelMessage> = serde_json::from_str(&body).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].session_id, wanted);
+    }
+
+    #[tokio::test]
+    async fn transcript_unknown_session_is_empty_not_an_error() {
+        let state = test_state();
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/tunnel/{}/transcript", SessionId::new()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_string(response).await, "[]");
+    }
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn upstream_credentials_prefers_menzi_overrides() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        unsafe {
+            std::env::set_var("OPENCODE_SERVER_USERNAME", "env-user");
+            std::env::set_var("OPENCODE_SERVER_PASSWORD", "env-pass");
+        }
+        assert_eq!(
+            upstream_credentials(),
+            Some(("env-user".to_string(), "env-pass".to_string()))
+        );
+
+        unsafe {
+            std::env::set_var("MENZI_OPENCODE_USERNAME", "menzi-user");
+            std::env::set_var("MENZI_OPENCODE_PASSWORD", "menzi-pass");
+        }
+        assert_eq!(
+            upstream_credentials(),
+            Some(("menzi-user".to_string(), "menzi-pass".to_string()))
+        );
+
+        unsafe {
+            std::env::remove_var("MENZI_OPENCODE_USERNAME");
+            std::env::remove_var("MENZI_OPENCODE_PASSWORD");
+            std::env::remove_var("OPENCODE_SERVER_USERNAME");
+            std::env::remove_var("OPENCODE_SERVER_PASSWORD");
+        }
+        assert_eq!(upstream_credentials(), None);
+    }
+
+    #[tokio::test]
+    async fn forwarded_calls_carry_upstream_basic_auth() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/api/session",
+            get(|headers: HeaderMap| async move {
+                let auth = headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                Json(json!({ "auth": auth }))
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        unsafe {
+            std::env::set_var("MENZI_OPENCODE_USERNAME", "proxy-user");
+            std::env::set_var("MENZI_OPENCODE_PASSWORD", "proxy-pass");
+        }
+
+        let state = ProxyState::new(
+            ProxyConfig::default_allowlist(),
+            format!("http://{address}"),
+        );
+        let proxy = create_router(state);
+        let response = proxy
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response).await;
+        assert!(body.contains("Basic cHJveHktdXNlcjpwcm94eS1wYXNz"), "{body}");
+
+        unsafe {
+            std::env::remove_var("MENZI_OPENCODE_USERNAME");
+            std::env::remove_var("MENZI_OPENCODE_PASSWORD");
+        }
+    }
+
+    #[tokio::test]
+    async fn event_stream_proxies_upstream_frames() {
+        let app = Router::new().route(
+            "/api/event",
+            get(|| async {
+                let stream = futures_util::stream::iter([
+                    Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"data: {\"a\":1}\n\n")),
+                    Ok(axum::body::Bytes::from_static(b": heartbeat\n\n")),
+                ]);
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/event-stream")
+                    .body(axum::body::Body::from_stream(stream))
+                    .unwrap()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let state = ProxyState::new(
+            ProxyConfig::default_allowlist(),
+            format!("http://{address}"),
+        );
+        let proxy = create_router(state);
+        let response = proxy
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/oc/event")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        let body = body_string(response).await;
+        assert!(body.contains("data: {\"a\":1}"), "{body}");
+        assert!(!body.contains("data: data:"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn event_stream_reports_upstream_failure() {
+        let app = Router::new().route(
+            "/api/event",
+            get(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let state = ProxyState::new(
+            ProxyConfig::default_allowlist(),
+            format!("http://{address}"),
+        );
+        let proxy = create_router(state);
+        let response = proxy
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/oc/event")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn sdk_session_routes_are_forwarded_without_the_api_prefix() {
+        let app = Router::new().route(
+            "/session/{id}/message",
+            get(|| async { Json(json!([{"info": {"id": "m1"}}])) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let state = ProxyState::new(
+            ProxyConfig::default_allowlist(),
+            format!("http://{address}"),
+        );
+        let proxy = create_router(state);
+        let response = proxy
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/session/abc/message")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response).await;
+        assert!(body.contains("m1"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn unlisted_unprefixed_routes_are_refused() {
+        let state = ProxyState::new(
+            ProxyConfig::default_allowlist(),
+            "http://127.0.0.1:1".to_string(),
+        );
+        let proxy = create_router(state);
+        let response = proxy
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/session/abc/deleteeverything")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn list_sessions_is_empty_before_any_event() {
+        let state = test_state();
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/tunnel/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_string(response).await, r#"{"sessions":[]}"#);
+    }
+
+    #[tokio::test]
+    async fn list_sessions_orders_by_most_recent_sequence() {
+        let state = test_state();
+        let older = SessionId::new();
+        let newer = SessionId::new();
+        record_event(&state, older, MessageType::Event, json!({"n": 0}));
+        record_event(&state, newer, MessageType::Event, json!({"n": 1}));
+        record_event(&state, newer, MessageType::Response, json!({"n": 2}));
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/tunnel/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = body_string(response).await;
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let sessions = value["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0]["id"], newer.to_string());
+        assert_eq!(sessions[0]["events_count"], 2);
+        assert_eq!(sessions[1]["id"], older.to_string());
+    }
+
+    #[tokio::test]
+    async fn health_check_is_bodyless_and_reports_opencode_url() {
+        let state = test_state();
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response).await;
+        assert!(body.contains("\"status\":\"ok\""), "{body}");
+        assert!(body.contains("http://127.0.0.1:17999"), "{body}");
     }
 
     #[tokio::test]
