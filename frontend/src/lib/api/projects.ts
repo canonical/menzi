@@ -1,0 +1,28 @@
+import { http } from './client';
+import { apiPaths } from '../routes';
+import type { CreateProjectInput, ListProjectsInput, Org, Project } from '../types';
+
+export async function listProjects(input: ListProjectsInput = {}): Promise<Project[]> {
+  const params = new URLSearchParams();
+  if (input.orgId) params.set('org_id', input.orgId);
+  if (input.search) params.set('search', input.search);
+  const query = params.toString();
+  return http.get<Project[]>(query ? `${apiPaths.projects.list()}?${query}` : apiPaths.projects.list());
+}
+
+export async function getProject(projectId: string): Promise<Project> {
+  return http.get<Project>(apiPaths.projects.detail(projectId));
+}
+
+export async function createProject(input: CreateProjectInput): Promise<Project> {
+  return http.post<Project>(apiPaths.projects.list(), {
+    org_id: input.orgId,
+    name: input.name,
+    slug: input.slug,
+    description: input.description ?? null,
+  });
+}
+
+export async function listOrgs(): Promise<Org[]> {
+  return http.get<Org[]>(apiPaths.orgs.list());
+}
