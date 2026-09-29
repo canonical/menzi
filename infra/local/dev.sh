@@ -39,9 +39,10 @@ fi
 API_BIND="${MENZI_API_BIND:-$DEV_HOST:8080}"
 ORCH_BIND="${MENZI_ORCHESTRATOR_BIND:-$DEV_HOST:8081}"
 PREVIEWS_BIND="${MENZI_PREVIEWS_BIND:-$DEV_HOST:8095}"
-OPENCODE_PORT="${MENZI_OPENCODE_PORT:-17999}"
 PROXY_BIND="${MENZI_SESSION_PROXY_BIND:-$DEV_HOST:8082}"
 LLM_BIND="${MENZI_LLM_GATEWAY_BIND:-$DEV_HOST:8083}"
+OPENCODE_PORT="${MENZI_OPENCODE_PORT:-17999}"
+STUB_MODEL_PORT="${MENZI_STUB_MODEL_PORT:-18000}"
 VITE_PORT="${MENZI_VITE_PORT:-5173}"
 DB_URL="${MENZI_DATABASE_URL:-postgres://menzi:menzi@127.0.0.1:5432/menzi}"
 
@@ -82,8 +83,6 @@ setsid env MENZI_GATEWAY_BIND="$PROXY_BIND" "$ROOT/target/debug/menzi-session-pr
 PIDS+=("$!")
 setsid env MENZI_GATEWAY_BIND="$LLM_BIND" "$ROOT/target/debug/menzi-llm-gateway" >"$LOG_DIR/llm-gateway.log" 2>&1 &
 PIDS+=("$!")
-OPENCODE_URL="${MENZI_OPENCODE_URL:-http://127.0.0.1:$OPENCODE_PORT}"
-wait_http "$OPENCODE_URL/api/model" "opencode" 60 200
 
 wait_http() {
   local url="$1" name="$2" tries="${3:-60}" want="${4:-}" code
@@ -108,10 +107,34 @@ wait_http() {
   return 1
 }
 
+if [ "${MENZI_SKIP_OPENCODE:-0}" != "1" ]; then
+  if [ "${MENZI_STUB_MODEL:-0}" = "1" ]; then
+    setsid env MENZI_STUB_MODEL_PORT="$STUB_MODEL_PORT" node "$ROOT/infra/local/stub-model.mjs" \
+      >"$LOG_DIR/stub-model.log" 2>&1 &
+    PIDS+=("$!")
+    wait_http "http://127.0.0.1:$STUB_MODEL_PORT/v1/models" "stub model" 30 200
+  fi
+  if [ "${MENZI_OPENCODE_HOST_OPENCODE:-0}" = "1" ] && command -v opencode >/dev/null 2>&1; then
+    if [ "${MENZI_OPENCODE_CONFIG:-overwrite}" = "overwrite" ] || [ ! -f "$HOME/.config/opencode/opencode.json" ]; then
+      mkdir -p "$HOME/.config/opencode"
+      cp "$ROOT/infra/local/opencode.json" "$HOME/.config/opencode/opencode.json"
+    fi
+    setsid env MENZI_OPENCODE_CONFIG_DIR="$HOME/.config/opencode" \
+      opencode serve --port "$OPENCODE_PORT" --hostname 127.0.0.1 \
+      >"$LOG_DIR/opencode.log" 2>&1 &
+    PIDS+=("$!")
+    OPENCODE_URL="http://127.0.0.1:$OPENCODE_PORT"
+    wait_http "$OPENCODE_URL/api/model" "opencode" 60 200
+  else
+    OPENCODE_URL="${MENZI_OPENCODE_URL:-http://10.10.10.251:4096}"
+    wait_http "$OPENCODE_URL/api/model" "opencode in lxd" 60 200
+  fi
+fi
+
 wait_http "http://${API_BIND/0.0.0.0/$WAIT_HOST}/health" "control plane" 60 200
 wait_http "http://${ORCH_BIND/0.0.0.0/$WAIT_HOST}/api/env/health" "orchestrator" 60 200
 wait_http "http://${PREVIEWS_BIND/0.0.0.0/$WAIT_HOST}/api/v1/previews" "previews" 60 405
-wait_http "http://${PROXY_BIND/0.0.0.0/$WAIT_HOST}/health" "session proxy"
+wait_http "http://${PROXY_BIND/0.0.0.0/$WAIT_HOST}/health" "session proxy" 60 200
 wait_http "http://${LLM_BIND/0.0.0.0/$WAIT_HOST}/v1/models" "llm gateway" 60 200
 
 if [ -n "${OPENCODE_URL:-}" ]; then
@@ -137,13 +160,14 @@ PIDS+=("$VITE_PID")
 wait_http "http://$WAIT_HOST:$VITE_PORT/" "frontend" 60 200
 
 printf '\nmenzi dev stack running\n'
-printf '  control plane  http://%s\n' "${API_BIND/0.0.0.0/$DISPLAY_HOST}"
-printf '  orchestrator   http://%s\n' "${ORCH_BIND/0.0.0.0/$DISPLAY_HOST}"
-printf '  previews       http://%s\n' "${PREVIEWS_BIND/0.0.0.0/$DISPLAY_HOST}"
-printf '  session proxy  http://%s\n' "${PROXY_BIND/0.0.0.0/$DISPLAY_HOST}"
-printf '  llm gateway    http://%s\n' "${LLM_BIND/0.0.0.0/$DISPLAY_HOST}"
-printf '  frontend       http://%s:%s\n' "$DISPLAY_HOST" "$VITE_PORT"
-printf '  logs           %s\n' "$LOG_DIR"
+printf '  control plane   http://%s\n' "${API_BIND/0.0.0.0/$DISPLAY_HOST}"
+printf '  orchestrator    http://%s\n' "${ORCH_BIND/0.0.0.0/$DISPLAY_HOST}"
+printf '  previews        http://%s\n' "${PREVIEWS_BIND/0.0.0.0/$DISPLAY_HOST}"
+printf '  session proxy   http://%s\n' "${PROXY_BIND/0.0.0.0/$DISPLAY_HOST}"
+printf '  llm gateway     http://%s\n' "${LLM_BIND/0.0.0.0/$DISPLAY_HOST}"
+printf '  opencode        %s\n' "${OPENCODE_URL:-skipped}"
+printf '  frontend        http://%s:%s\n' "$DISPLAY_HOST" "$VITE_PORT"
+printf '  logs            %s\n' "$LOG_DIR"
 
 if [ "$OPEN" = "1" ]; then
   xdg-open "http://$WAIT_HOST:$VITE_PORT" 2>/dev/null || true
