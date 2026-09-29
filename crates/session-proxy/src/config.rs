@@ -10,8 +10,21 @@ impl ProxyConfig {
     pub fn default_allowlist() -> Self {
         Self {
             allowlist: vec![
+                "GET /session".to_string(),
+                "POST /session".to_string(),
+                "GET /session/:id".to_string(),
+                "DELETE /session/:id".to_string(),
+                "GET /session/:id/message".to_string(),
+                "POST /session/:id/message".to_string(),
+                "GET /session/:id/diff".to_string(),
+                "POST /session/:id/interrupt".to_string(),
+                "GET /vcs".to_string(),
+                "GET /vcs/status".to_string(),
+                "GET /agent".to_string(),
                 "GET /api/session".to_string(),
                 "POST /api/session".to_string(),
+                "GET /api/session/:id".to_string(),
+                "GET /api/session/:id/message".to_string(),
                 "POST /api/session/:id/prompt".to_string(),
                 "GET /api/session/:id/log".to_string(),
                 "POST /api/session/:id/interrupt".to_string(),
@@ -20,6 +33,8 @@ impl ProxyConfig {
                 "GET /api/vcs/diff".to_string(),
                 "GET /api/model".to_string(),
                 "GET /api/agent".to_string(),
+                "GET /api/event".to_string(),
+                "GET /event".to_string(),
                 "POST /api/session/:id/switchModel".to_string(),
                 "POST /api/session/:id/switchAgent".to_string(),
                 "GET /api/fs/*".to_string(),
@@ -96,6 +111,30 @@ mod tests {
         let config = ProxyConfig::default_allowlist();
         assert!(config.allowlist.contains(&"GET /api/session".to_string()));
         assert!(config.allowlist.contains(&"POST /api/session".to_string()));
+        assert!(config.allowlist.contains(&"GET /api/session/:id/message".to_string()));
+        assert!(config.allowlist.contains(&"GET /api/event".to_string()));
+    }
+
+    #[test]
+    fn sdk_session_routes_are_allowed() {
+        let config = ProxyConfig::default_allowlist();
+        assert!(config.is_allowed("GET", "/session"));
+        assert!(config.is_allowed("POST", "/session"));
+        assert!(config.is_allowed("GET", "/session/abc/message"));
+        assert!(config.is_allowed("POST", "/session/abc/message"));
+        assert!(config.is_allowed("POST", "/session/abc/interrupt"));
+        assert!(config.is_allowed("GET", "/session/abc/diff"));
+        assert!(config.is_allowed("GET", "/vcs/status"));
+        assert!(config.is_allowed("GET", "/agent"));
+        assert!(config.is_allowed("GET", "/event"));
+    }
+
+    #[test]
+    fn session_message_history_is_allowed() {
+        let config = ProxyConfig::default_allowlist();
+        assert!(config.is_allowed("GET", "/api/session/abc/message"));
+        assert!(config.is_allowed("GET", "/api/session/abc"));
+        assert!(config.is_allowed("GET", "/api/event"));
     }
 
     #[test]
