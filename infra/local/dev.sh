@@ -105,16 +105,26 @@ wait_http() {
   return 1
 }
 
-wait_http "http://${API_BIND/0.0.0.0/$WAIT_HOST}/health" "control plane"
-wait_http "http://${ORCH_BIND/0.0.0.0/$WAIT_HOST}/api/env/status" "orchestrator"
-wait_http "http://${PREVIEWS_BIND/0.0.0.0/$WAIT_HOST}/api/v1/previews" "previews"
+wait_http "http://${API_BIND/0.0.0.0/$WAIT_HOST}/health" "control plane" 60 200
+wait_http "http://${ORCH_BIND/0.0.0.0/$WAIT_HOST}/api/env/health" "orchestrator" 60 200
+wait_http "http://${PREVIEWS_BIND/0.0.0.0/$WAIT_HOST}/api/v1/previews" "previews" 60 405
 wait_http "http://${PROXY_BIND/0.0.0.0/$WAIT_HOST}/health" "session proxy"
-wait_http "http://${LLM_BIND/0.0.0.0/$WAIT_HOST}/v1/models" "llm gateway"
+wait_http "http://${LLM_BIND/0.0.0.0/$WAIT_HOST}/v1/models" "llm gateway" 60 200
+
+if [ -n "${OPENCODE_URL:-}" ]; then
+  if curl -s -f -X POST "http://${PROXY_BIND/0.0.0.0/$WAIT_HOST}/api/opencode/register" \
+    -H 'content-type: application/json' --max-time 5 \
+    -d "{\"url\":\"$OPENCODE_URL\"}" >/dev/null 2>&1; then
+    echo "opencode registered with session proxy"
+  else
+    echo "warning: opencode registration failed; the proxy keeps its default target" >&2
+  fi
+fi
 
 setsid env -C "$ROOT/frontend" npm run dev -- --host "$DEV_HOST" --port "$VITE_PORT" >"$LOG_DIR/vite.log" 2>&1 &
 VITE_PID=$!
 PIDS+=("$VITE_PID")
-wait_http "http://$WAIT_HOST:$VITE_PORT/" "frontend"
+wait_http "http://$WAIT_HOST:$VITE_PORT/" "frontend" 60 200
 
 printf '\nmenzi dev stack running\n'
 printf '  control plane  http://%s\n' "${API_BIND/0.0.0.0/$DISPLAY_HOST}"
