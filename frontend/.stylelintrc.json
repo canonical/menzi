@@ -1,0 +1,30 @@
+{
+  "extends": "stylelint-config-standard-scss",
+  "rules": {
+    "color-no-hex": true,
+    "function-no-unknown": [true, { "ignoreFunctions": ["min", "max", "clamp"] }],
+    "unit-allowed-list": [
+      "rem",
+      "em",
+      "%",
+      "fr",
+      "vh",
+      "vw",
+      "vmin",
+      "vmax",
+      "ch",
+      "ex",
+      "s",
+      "ms",
+      "deg",
+      "px"
+    ],
+    "selector-class-pattern": [
+      "^(?!p-|l-)[a-z][a-zA-Z0-9_-]*$",
+      { "message": "Vanilla classes (p-*, l-*) must not be redefined. Style via the framework or a design token." }
+    ],
+    "scss/load-no-partial-leading-underscore": null,
+    "no-descending-specificity": null,
+    "declaration-property-value-no-unknown": null
+  }
+}
