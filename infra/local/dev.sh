@@ -83,16 +83,25 @@ setsid env MENZI_GATEWAY_BIND="$LLM_BIND" "$ROOT/target/debug/menzi-llm-gateway"
 PIDS+=("$!")
 
 wait_http() {
-  local url="$1" name="$2" tries="${3:-60}" code
+  local url="$1" name="$2" tries="${3:-60}" want="${4:-}" code
   for _ in $(seq 1 "$tries"); do
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$url" || true)"
-    if [ "$code" != "000" ]; then
+    if [ -n "$want" ]; then
+      if [ "$code" = "$want" ]; then
+        echo "$name up ($code) at $url"
+        return 0
+      fi
+    elif [ "$code" != "000" ]; then
       echo "$name up ($code) at $url"
       return 0
     fi
     sleep 1
   done
-  echo "error: $name did not come up at $url; see $LOG_DIR" >&2
+  if [ -n "$want" ]; then
+    echo "error: $name did not answer $want at $url; see $LOG_DIR" >&2
+  else
+    echo "error: $name did not come up at $url; see $LOG_DIR" >&2
+  fi
   return 1
 }
 
