@@ -1,6 +1,6 @@
 import { useLayoutEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Chip } from '@canonical/react-components';
+import { Button } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
 import { listMessages } from '../../lib/api/opencode';
 import { getErrorMessage } from '../../lib/api/errors';
@@ -21,8 +21,6 @@ import { ToolCallStep } from './chat/ToolCallStep';
 import { CompactionMarker, ThinkingBlock } from './chat/ThinkingBlock';
 import { S } from '../../strings/catalogue';
 
-type ChipAppearance = 'caution' | 'information' | 'negative' | 'positive';
-
 function errorText(info: MessageInfo): string {
   if (!info.error) return '';
   if (typeof info.error.message === 'string') return info.error.message;
@@ -31,21 +29,6 @@ function errorText(info: MessageInfo): string {
     return info.error.data.message;
   }
   return info.error.name ?? S.chat.unknownError;
-}
-
-function finishAppearance(info: MessageInfo): ChipAppearance {
-  if (info.error) return 'negative';
-  if (info.finish === 'stop') return 'positive';
-  if (info.finish === 'error') return 'negative';
-  return 'information';
-}
-
-function modelLabel(info: MessageInfo): string {
-  const model = info.model;
-  if (!model) return '';
-  const id = model.modelID ?? model.id ?? '';
-  if (!id) return '';
-  return model.providerID ? `${model.providerID}/${id}` : id;
 }
 
 function MessageParts({ parts }: { parts: MessagePart[] }) {
@@ -129,7 +112,6 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
             {visible.map((message) => {
               const info = message.info;
               const isUser = info.role === 'user';
-              const label = modelLabel(info);
               const failure = errorText(info);
               return (
                 <li
@@ -137,29 +119,11 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
                   className={`app-chat-turn${isUser ? ' app-chat-turn--user' : ''}`}
                   data-testid={`msg-${info.role}`}
                 >
-                  <div className="app-chat-turn__meta">
-                    <span className="app-chat-turn__author">
-                      {isUser ? S.chat.you : (info.agent ?? S.chat.agent)}
-                    </span>
-                    {label ? (
-                      <Chip
-                        className="u-margin--left u-no-margin--bottom"
-                        value={label}
-                        appearance="information"
-                        isReadOnly
-                        isDense
-                      />
-                    ) : null}
-                    {info.finish ? (
-                      <Chip
-                        className="u-margin--left u-no-margin--bottom"
-                        value={info.finish}
-                        appearance={finishAppearance(info)}
-                        isReadOnly
-                        isDense
-                      />
-                    ) : null}
-                  </div>
+                  {isUser ? (
+                    <div className="app-chat-turn__meta">
+                      <span className="app-chat-turn__author">{S.chat.you}</span>
+                    </div>
+                  ) : null}
                   <MessageParts parts={message.parts ?? []} />
                   {failure ? (
                     <p className="p-form-validation__message" data-testid="msg-error">

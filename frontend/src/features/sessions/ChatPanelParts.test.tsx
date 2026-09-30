@@ -114,11 +114,32 @@ describe('ChatPanel parts', () => {
     expect(assistant?.querySelectorAll('.app-chat-turn__body')).toHaveLength(2);
   });
 
-  it('shows the model and finish chips from message info', async () => {
+  it('heads only the user messages', async () => {
+    mockApi(ORDERED);
+    const { container } = renderPanel();
+    await screen.findByText('Here is what I found.');
+    const user = container.querySelector('li[data-testid="msg-user"]');
+    const assistant = container.querySelector('li[data-testid="msg-assistant"]');
+    expect(user?.querySelector('.app-chat-turn__author')?.textContent).toBe('You');
+    expect(assistant?.querySelector('.app-chat-turn__meta')).toBeNull();
+  });
+
+  it('drops the model and stop reason rather than showing them on the agent turn', async () => {
     mockApi(ORDERED);
     renderPanel();
-    expect(await screen.findByText('opencode/space-bunny-free')).toBeInTheDocument();
-    expect(screen.getByText('stop')).toBeInTheDocument();
+    await screen.findByText('Here is what I found.');
+    expect(screen.queryByText('opencode/space-bunny-free')).not.toBeInTheDocument();
+    expect(screen.queryByText('stop')).not.toBeInTheDocument();
+  });
+
+  it('keeps a tool call and its thinking on one line each, with nothing above them', async () => {
+    mockApi(ORDERED);
+    const { container } = renderPanel();
+    await screen.findByText('Here is what I found.');
+    const assistant = container.querySelector('li[data-testid="msg-assistant"]');
+    expect(assistant?.querySelector('.app-chat-turn__meta')).toBeNull();
+    expect(labelTexts()).toEqual(['Reading: src/config.ts']);
+    expect(assistant?.querySelector('.app-thinking')).not.toBeNull();
   });
 
   it('keeps reasoning folded rather than inline', async () => {
@@ -181,6 +202,6 @@ describe('ChatPanel parts', () => {
     renderPanel();
     expect(await screen.findByText("I'll run both commands.")).toBeInTheDocument();
     expect(labelTexts()).toEqual(['Running: echo menzi-tool-probe', 'Reading: hostname']);
-    expect(screen.getByText('tool-calls')).toBeInTheDocument();
+    expect(screen.queryByText('tool-calls')).not.toBeInTheDocument();
   });
 });

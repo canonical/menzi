@@ -349,7 +349,6 @@ export const S = {
     sending: 'Sending',
     sendFailed: 'The prompt could not be sent.',
     you: 'You',
-    agent: 'Agent',
     emptyTitle: 'No messages yet',
     emptyBody: 'Send a prompt to start the conversation. The reply is streamed back from opencode.',
     jumpToLatest: 'Jump to latest',
