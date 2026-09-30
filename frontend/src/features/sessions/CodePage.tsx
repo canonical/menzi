@@ -114,8 +114,8 @@ export function CodePage() {
 
   return (
     <div className="app-code">
-      <div className="app-page-header">
-        <h2 className="p-heading--3">{S.sections.code}</h2>
+      <div className="app-page-header app-page-header--compact">
+        <h1 className="u-off-screen">{S.sections.code}</h1>
         <div className="app-page-header__actions">
           <Button
             appearance="positive"
