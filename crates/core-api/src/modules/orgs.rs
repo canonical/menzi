@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::ToSchema;
 use uuid::Uuid;
+
+use crate::identity::Caller;
 
 #[derive(Serialize, ToSchema)]
 pub struct OrgResponse {
@@ -38,18 +40,34 @@ fn valid_slug(slug: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+pub fn caller_uuid(caller: &Caller) -> Option<Uuid> {
+    caller.user_id().and_then(|id| Uuid::parse_str(id).ok())
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/orgs",
     tag = "orgs",
     responses(
-        (status = 200, description = "List all orgs", body = Vec<OrgResponse>)
+        (status = 200, description = "List the caller's orgs", body = Vec<OrgResponse>)
     )
 )]
-pub async fn list_orgs(State(pool): State<PgPool>) -> Response {
+pub async fn list_orgs(
+    State(pool): State<PgPool>,
+    Extension(caller): Extension<Caller>,
+) -> Response {
+    let Some(caller_id) = caller_uuid(&caller) else {
+        return (StatusCode::OK, Json(Vec::<OrgResponse>::new())).into_response();
+    };
+
     let orgs = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT id::text, name, slug FROM orgs ORDER BY created_at DESC",
+        "SELECT o.id::text, o.name, o.slug
+         FROM orgs o
+         LEFT JOIN users u ON u.org_id = o.id
+         WHERE u.id = $1::uuid
+         ORDER BY o.created_at DESC",
     )
+    .bind(caller_id)
     .fetch_all(&pool)
     .await;
 
@@ -57,7 +75,11 @@ pub async fn list_orgs(State(pool): State<PgPool>) -> Response {
         Ok(rows) => {
             let orgs: Vec<OrgResponse> = rows
                 .into_iter()
-                .map(|(id, name, slug)| OrgResponse { id, name, slug })
+                .map(|row| OrgResponse {
+                    id: row.0,
+                    name: row.1,
+                    slug: row.2,
+                })
                 .collect();
             (StatusCode::OK, Json(orgs)).into_response()
         }
@@ -73,13 +95,21 @@ pub async fn list_orgs(State(pool): State<PgPool>) -> Response {
     responses(
         (status = 201, description = "Org created", body = OrgResponse),
         (status = 400, description = "Invalid request"),
+        (status = 401, description = "No caller"),
         (status = 409, description = "Slug already used")
     )
 )]
 pub async fn create_org(
     State(pool): State<PgPool>,
+    Extension(caller): Extension<Caller>,
     Json(body): Json<CreateOrgRequest>,
 ) -> Response {
+    let Some(caller_id) = caller_uuid(&caller) else {
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "who is calling is not established",
+        );
+    };
     if body.name.trim().is_empty() {
         return error_response(StatusCode::BAD_REQUEST, "name must not be empty");
     }
@@ -96,31 +126,43 @@ pub async fn create_org(
         );
     }
 
-    let row = sqlx::query_as::<_, (String, String, String)>(
+    let inserted = sqlx::query_as::<_, (Uuid, String, String)>(
         "INSERT INTO orgs (name, slug) VALUES ($1, $2) \
-         RETURNING id::text, name, slug",
+         RETURNING id, name, slug",
     )
     .bind(body.name.trim())
     .bind(body.slug.trim().to_lowercase())
     .fetch_one(&pool)
     .await;
 
-    match row {
-        Ok(row) => (
-            StatusCode::CREATED,
-            Json(OrgResponse {
-                id: row.0,
-                name: row.1,
-                slug: row.2,
-            }),
-        )
-            .into_response(),
+    let row = match inserted {
+        Ok(row) => row,
         Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => {
-            error_response(StatusCode::CONFLICT, "an org with this slug already exists")
-                .into_response()
+            return error_response(StatusCode::CONFLICT, "an org with this slug already exists");
         }
-        Err(error) => server_error(error),
+        Err(error) => return server_error(error),
+    };
+
+    // The first org a user creates becomes theirs, so a new account has somewhere
+    // to put its first project. It is only ever set once.
+    if let Err(error) = sqlx::query("UPDATE users SET org_id = $2 WHERE id = $1 AND org_id IS NULL")
+        .bind(caller_id)
+        .bind(row.0)
+        .execute(&pool)
+        .await
+    {
+        tracing::warn!("could not attach the new org to its creator: {error}");
     }
+
+    (
+        StatusCode::CREATED,
+        Json(OrgResponse {
+            id: row.0.to_string(),
+            name: row.1,
+            slug: row.2,
+        }),
+    )
+        .into_response()
 }
 
 #[utoipa::path(
@@ -130,18 +172,30 @@ pub async fn create_org(
     params(("id" = String, Path, description = "Org ID")),
     responses(
         (status = 200, description = "Org details", body = OrgResponse),
+        (status = 403, description = "Not the caller's org"),
         (status = 404, description = "Org not found")
     )
 )]
-pub async fn get_org(State(pool): State<PgPool>, Path(id): Path<String>) -> Response {
+pub async fn get_org(
+    State(pool): State<PgPool>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+) -> Response {
     let Ok(parsed) = Uuid::parse_str(&id) else {
         return error_response(StatusCode::NOT_FOUND, "org not found");
     };
+    let Some(caller_id) = caller_uuid(&caller) else {
+        return error_response(StatusCode::FORBIDDEN, "not your organisation");
+    };
 
     let row = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT id::text, name, slug FROM orgs WHERE id = $1::uuid",
+        "SELECT o.id::text, o.name, o.slug
+         FROM orgs o
+         JOIN users u ON u.org_id = o.id
+         WHERE o.id = $1::uuid AND u.id = $2::uuid",
     )
     .bind(parsed)
+    .bind(caller_id)
     .fetch_optional(&pool)
     .await;
 
@@ -155,7 +209,7 @@ pub async fn get_org(State(pool): State<PgPool>, Path(id): Path<String>) -> Resp
             }),
         )
             .into_response(),
-        Ok(None) => error_response(StatusCode::NOT_FOUND, "org not found").into_response(),
+        Ok(None) => error_response(StatusCode::NOT_FOUND, "org not found"),
         Err(error) => server_error(error),
     }
 }

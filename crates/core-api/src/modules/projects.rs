@@ -1,4 +1,4 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::ToSchema;
 use uuid::Uuid;
+
+use crate::identity::Caller;
+use crate::modules::orgs::caller_uuid;
 
 #[derive(Serialize, ToSchema)]
 pub struct ProjectResponse {
@@ -20,7 +23,7 @@ pub struct ProjectResponse {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateProjectRequest {
-    pub org_id: String,
+    pub org_id: Option<String>,
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
@@ -74,11 +77,15 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 )]
 pub async fn list_projects(
     State(pool): State<PgPool>,
+    Extension(caller): Extension<Caller>,
     Query(query): Query<ListProjectsQuery>,
 ) -> Response {
     let search = query
         .search
         .map(|value| format!("%{}%", value.trim().to_lowercase()));
+    let Some(caller_id) = caller_uuid(&caller) else {
+        return (StatusCode::OK, Json(Vec::<ProjectResponse>::new())).into_response();
+    };
     let org_filter = match query.org_id.as_deref() {
         Some(value) if Uuid::parse_str(value).is_ok() => Some(Uuid::parse_str(value).ok()),
         Some(_) => {
@@ -99,14 +106,19 @@ pub async fn list_projects(
             String,
         ),
     >(
-        "SELECT id::text, org_id::text, name, slug, description, created_at::text, \
-         updated_at::text FROM projects \
-         WHERE ($1::uuid IS NULL OR org_id = $1::uuid) \
-         AND ($2::text IS NULL OR lower(name) LIKE $2::text OR lower(slug) LIKE $2::text) \
-         ORDER BY updated_at DESC",
+        "SELECT p.id::text, p.org_id::text, p.name, p.slug, p.description, \
+         p.created_at::text, p.updated_at::text \
+         FROM projects p \
+         JOIN project_members m ON m.project_id = p.id \
+         WHERE m.user_id = $3::uuid \
+         AND ($1::uuid IS NULL OR p.org_id = $1::uuid) \
+         AND ($2::text IS NULL OR lower(p.name) LIKE $2::text OR lower(p.slug) LIKE $2::text) \
+         GROUP BY p.id \
+         ORDER BY p.updated_at DESC",
     )
     .bind(org_filter)
     .bind(search.as_deref())
+    .bind(caller_id)
     .fetch_all(&pool)
     .await;
 
@@ -136,8 +148,15 @@ pub async fn list_projects(
 )]
 pub async fn create_project(
     State(pool): State<PgPool>,
+    Extension(caller): Extension<Caller>,
     Json(body): Json<CreateProjectRequest>,
 ) -> Response {
+    let Some(caller_id) = caller_uuid(&caller) else {
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "who is calling is not established",
+        );
+    };
     if body.name.trim().is_empty() {
         return error_response(StatusCode::BAD_REQUEST, "name must not be empty");
     }
@@ -161,9 +180,23 @@ pub async fn create_project(
             "slug may only contain lowercase letters, digits and hyphens",
         );
     }
-    if Uuid::parse_str(&body.org_id).is_err() {
-        return error_response(StatusCode::BAD_REQUEST, "org_id must be a uuid");
-    }
+    // A caller who has not created an organisation yet may omit the org, in
+    // which case the project goes into the one they own.
+    let org_id = match body.org_id.as_deref() {
+        Some(value) => match Uuid::parse_str(value) {
+            Ok(parsed) => parsed,
+            Err(_) => return error_response(StatusCode::BAD_REQUEST, "org_id must be a uuid"),
+        },
+        None => match caller_org(&pool, caller_id).await {
+            Some(org) => org,
+            None => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "create an organisation before your first project",
+                )
+            }
+        },
+    };
 
     let row = sqlx::query_as::<
         _,
@@ -181,29 +214,52 @@ pub async fn create_project(
          RETURNING id::text, org_id::text, name, slug, description, created_at::text, \
          updated_at::text",
     )
-    .bind(Uuid::parse_str(&body.org_id).ok())
+    .bind(org_id)
     .bind(body.name.trim())
     .bind(body.slug.trim().to_lowercase())
     .bind(body.description.as_deref())
     .fetch_one(&pool)
     .await;
 
-    match row {
-        Ok(row) => (StatusCode::CREATED, Json(map_row(row))).into_response(),
+    let created = match row {
+        Ok(row) => map_row(row),
         Err(sqlx::Error::Database(error)) if error.is_foreign_key_violation() => {
-            error_response(StatusCode::NOT_FOUND, "org not found").into_response()
+            return error_response(StatusCode::NOT_FOUND, "org not found");
         }
         Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => {
-            error_response(
+            return error_response(
                 StatusCode::CONFLICT,
                 "a project with this slug already exists in this org",
-            )
-            .into_response()
+            );
         }
         Err(error) => {
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()).into_response()
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string());
         }
+    };
+
+    // The creator owns what they create, so the project is visible to them
+    // without a second membership step.
+    if let Err(error) = sqlx::query(
+        "INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'owner')",
+    )
+    .bind(Uuid::parse_str(&created.id).ok())
+    .bind(caller_id)
+    .execute(&pool)
+    .await
+    {
+        tracing::warn!("could not record the project owner: {error}");
     }
+
+    (StatusCode::CREATED, Json(created)).into_response()
+}
+
+async fn caller_org(pool: &PgPool, caller_id: Uuid) -> Option<Uuid> {
+    sqlx::query_scalar::<_, Uuid>("SELECT org_id FROM users WHERE id = $1 AND org_id IS NOT NULL")
+        .bind(caller_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
 }
 
 #[utoipa::path(
