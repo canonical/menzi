@@ -16,7 +16,9 @@ async fn main() {
     let workspaces =
         Arc::new(menzi_core_api::modules::workspaces_proxy::WorkspaceProxy::from_env());
 
-    let app = menzi_core_api::create_router()
+    let auth = menzi_core_api::auth::AuthState::from_env(db.pool().clone()).await;
+
+    let app = menzi_core_api::create_router(std::sync::Arc::new(auth))
         .layer(axum::extract::Extension(workspaces.caller_resolver()))
         .layer(axum::extract::Extension(previews))
         .layer(axum::extract::Extension(workspaces))

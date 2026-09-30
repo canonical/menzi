@@ -35,6 +35,10 @@ impl SessionSecret {
     }
 }
 
+pub fn sha256(value: &str) -> Vec<u8> {
+    Sha256::digest(value.as_bytes()).to_vec()
+}
+
 pub fn digest(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
 }

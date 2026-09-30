@@ -23,6 +23,9 @@ reqwest.workspace = true
 async-trait.workspace = true
 utoipa.workspace = true
 tower = { version = "0.5", features = ["util"] }
+openidconnect = "4"
+base64 = "0.22"
+sha2 = "0.10"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

@@ -132,7 +132,10 @@ mod tests {
     }
 
     async fn core_router(proxy: Arc<PreviewProxy>) -> Router<()> {
-        crate::create_router()
+        let auth = std::sync::Arc::new(crate::auth::AuthState::for_tests_with(
+            std::sync::Arc::new(crate::identity::DevCallerResolver::new("dev-user")),
+        ));
+        crate::create_router(auth)
             .layer(Extension(proxy))
             .with_state(lazy_pool())
     }
