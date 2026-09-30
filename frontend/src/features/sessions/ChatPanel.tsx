@@ -90,8 +90,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
   });
 
   return (
-    <section className="app-section app-code__chat-panel">
-      <h2 className="app-panel-heading">{S.chat.title}</h2>
+    <section className="app-section app-code__chat-panel" aria-label={S.chat.title}>
       <div
         className="app-chat-scroll"
         ref={scrollRef}
