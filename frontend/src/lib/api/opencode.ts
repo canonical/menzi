@@ -4,7 +4,6 @@ import type {
   OpencodeMessage,
   OpencodeModel,
   OpencodeSession,
-  OpencodeVcsFile,
 } from '../types';
 
 interface DataEnvelope<T> {
@@ -62,63 +61,40 @@ export async function interruptSession(sessionId: string): Promise<void> {
   await http.post(`/session/${sessionId}/interrupt`, {});
 }
 
-export async function getVcsStatus(): Promise<OpencodeVcsFile[]> {
-  const response = await http.get<Record<string, unknown>[]>('/vcs/status');
-  return response.map((entry) => ({
-    file: String(entry.file ?? entry.path ?? ''),
-    status: typeof entry.status === 'string' ? entry.status : undefined,
-    additions: typeof entry.additions === 'number' ? entry.additions : undefined,
-    deletions: typeof entry.deletions === 'number' ? entry.deletions : undefined,
-  }));
-}
-
 export interface FileDiff {
-  path: string;
+  file: string;
   additions: number;
   deletions: number;
-  hunks: DiffHunk[];
+  status?: string;
+  /** The unified diff for the file, in the format `git diff` produces. */
+  patch: string;
 }
 
-export interface DiffHunk {
-  header: string;
-  lines: DiffLine[];
-}
-
-export interface DiffLine {
-  kind: 'context' | 'add' | 'remove';
-  text: string;
-}
-
-export async function getSessionDiff(sessionId: string): Promise<FileDiff[]> {
-  const response = await http.get<Record<string, unknown>[]>(`/session/${sessionId}/diff`);
+/**
+ * The changes a session made. `messageID` narrows it to a single turn, which
+ * is how a file that is missing its patch gets one: the session level response
+ * is only the union of the per turn diffs.
+ */
+export async function getSessionDiff(sessionId: string, messageId?: string): Promise<FileDiff[]> {
+  const query = messageId ? `?messageID=${encodeURIComponent(messageId)}` : '';
+  const response = await http.get<Record<string, unknown>[]>(
+    `/session/${sessionId}/diff${query}`,
+  );
   return response.map(normaliseDiff);
 }
 
-function normaliseDiff(raw: Record<string, unknown>): FileDiff {
-  const additions = numberOf(raw, 'additions');
-  const deletions = numberOf(raw, 'deletions');
-  const hunks: DiffHunk[] = [];
-  const rawHunks = Array.isArray(raw.hunks) ? raw.hunks : [];
-  for (const entry of rawHunks) {
-    if (typeof entry !== 'object' || entry === null) continue;
-    const hunk = entry as Record<string, unknown>;
-    const lines: DiffLine[] = [];
-    const rawLines = Array.isArray(hunk.lines) ? hunk.lines : [];
-    for (const rawLine of rawLines) {
-      if (typeof rawLine !== 'object' || rawLine === null) continue;
-      const line = rawLine as Record<string, unknown>;
-      const kind = line.kind ?? line.type;
-      if (kind !== 'add' && kind !== 'remove' && kind !== 'context') continue;
-      lines.push({ kind, text: String(line.text ?? '') });
-    }
-    hunks.push({ header: String(hunk.header ?? ''), lines });
-  }
-  return { path: String(raw.path ?? raw.file ?? ''), additions, deletions, hunks };
+function count(value: unknown): number {
+  return typeof value === 'number' ? value : 0;
 }
 
-function numberOf(raw: Record<string, unknown>, key: string): number {
-  const value = raw[key];
-  return typeof value === 'number' ? value : 0;
+function normaliseDiff(raw: Record<string, unknown>): FileDiff {
+  return {
+    file: String(raw.file ?? raw.path ?? ''),
+    additions: count(raw.additions),
+    deletions: count(raw.deletions),
+    status: typeof raw.status === 'string' ? raw.status : undefined,
+    patch: typeof raw.patch === 'string' ? raw.patch : '',
+  };
 }
 
 export function eventStreamUrl(): string {
