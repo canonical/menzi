@@ -117,7 +117,6 @@ export interface EnvLogs {
 
 export interface Project {
   id: string;
-  org_id: string;
   name: string;
   slug: string;
   description: string | null;
@@ -126,14 +125,12 @@ export interface Project {
 }
 
 export interface CreateProjectInput {
-  orgId: string;
   name: string;
   slug: string;
   description?: string;
 }
 
 export interface ListProjectsInput {
-  orgId?: string;
   search?: string;
 }
 
