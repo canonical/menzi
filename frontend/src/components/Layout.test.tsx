@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NotificationProvider } from '@canonical/react-components';
@@ -57,6 +58,7 @@ beforeEach(() => {
     }),
   );
   useActiveProject.setState({ projectId: '', section: 'code' });
+  localStorage.clear();
 });
 
 describe('Layout', () => {
@@ -94,5 +96,38 @@ describe('Layout', () => {
 
     expect(nav).toContainElement(control);
     expect(container.querySelector('.l-status')).not.toContainElement(control);
+  });
+
+  it('hides the navigation from the top of the menu', async () => {
+    const user = userEvent.setup();
+    renderLayout();
+
+    await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
+
+    expect(screen.queryByText(S.nav.projects)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: S.nav.showNavigation })).toBeInTheDocument();
+  });
+
+  it('brings the navigation back', async () => {
+    const user = userEvent.setup();
+    renderLayout();
+
+    await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
+    await user.click(screen.getByRole('button', { name: S.nav.showNavigation }));
+
+    expect(screen.getByText(S.nav.projects)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: S.nav.showNavigation })).not.toBeInTheDocument();
+  });
+
+  it('remembers the hidden navigation across a remount', async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderLayout();
+
+    await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
+    unmount();
+    renderLayout();
+
+    expect(screen.queryByText(S.nav.projects)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: S.nav.showNavigation })).toBeInTheDocument();
   });
 });
