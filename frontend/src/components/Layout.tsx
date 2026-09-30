@@ -18,6 +18,15 @@ import { listProjects } from '../lib/api/projects';
 import { queryKeys, routes, type ProjectSection } from '../lib/routes';
 import { useActiveProject } from '../stores/activeProject';
 import { useAuthStore } from '../stores/auth';
+import { useSession } from '../stores/useSession';
+import {
+  currentTheme,
+  nextTheme,
+  setTheme,
+  themeGlyph,
+  themeLabel,
+  type Theme,
+} from '../lib/theme';
 import { S } from '../strings/catalogue';
 
 interface LayoutProps {
@@ -25,6 +34,15 @@ interface LayoutProps {
 }
 
 type NavItems = NonNullable<SideNavigationProps<LinkProps>['items']>;
+
+interface RailItem {
+  key: string;
+  icon: string;
+  glyph?: string;
+  label: string;
+  to?: string;
+  onClick?: () => void;
+}
 
 function sectionForPath(pathname: string): ProjectSection {
   if (pathname.endsWith('/design')) return 'design';
@@ -34,6 +52,7 @@ function sectionForPath(pathname: string): ProjectSection {
 
 export function Layout({ children }: LayoutProps) {
   const { user } = useAuthStore();
+  const { signOut } = useSession();
   const location = useLocation();
   const { projectId, section, recordRoute } = useActiveProject();
   const segment = sectionForPath(location.pathname);
@@ -41,11 +60,16 @@ export function Layout({ children }: LayoutProps) {
   // getting the chat more room, not a preference worth carrying between visits,
   // so the choice is deliberately not persisted.
   const [navCollapsed, setNavCollapsed] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [theme, setThemeState] = useState<Theme>(currentTheme);
+
+  const cycleTheme = useCallback(() => {
+    const next = nextTheme(theme);
+    setTheme(next);
+    setThemeState(next);
+  }, [theme]);
 
   const toggleNav = useCallback((collapsed: boolean) => {
     setNavCollapsed(collapsed);
-    setDrawerOpen(false);
   }, []);
 
   useEffect(() => {
@@ -85,6 +109,23 @@ export function Layout({ children }: LayoutProps) {
     },
   ];
 
+  const railItems: RailItem[] = [
+    ...(projectPath
+      ? [
+          { key: 'p-code', icon: 'code', label: S.sections.code, to: projectPath.code },
+          { key: 'p-design', icon: 'file-blank', label: S.sections.design, to: projectPath.design },
+          { key: 'p-project', icon: 'settings', label: S.sections.project, to: projectPath.project },
+        ]
+      : []),
+    { key: 'projects', icon: 'code', label: S.nav.projects, to: routes.projects.list() },
+    { key: 'inbox', icon: 'information', label: S.nav.needsYou, to: routes.inbox() },
+    { key: 'settings', icon: 'user', label: S.nav.settings, to: routes.settings() },
+    { key: 'theme', icon: 'glyph', glyph: themeGlyph(theme), label: themeLabel(theme), onClick: cycleTheme },
+    ...(user
+      ? [{ key: 'sign-out', icon: 'external-link', label: S.app.signOut, onClick: () => void signOut() }]
+      : []),
+  ];
+
 
 
   if (projectPath) {
@@ -97,46 +138,69 @@ export function Layout({ children }: LayoutProps) {
       ],
     });
   }
-  const navigation = (showCollapse: boolean) => (
+  const navigation = (
     <div>
       <div className="app-navigation-selector">
         <ProjectSelector sectionFor={sectionForPath} />
-        {showCollapse ? (
-          <Button
-            appearance="base"
-            className="app-navigation-hide"
-            aria-label={S.nav.hideNavigation}
-            aria-expanded={true}
-            onClick={() => toggleNav(true)}
-          >
-            <Icon name="collapse" />
-          </Button>
-        ) : null}
+        <Button
+          appearance="base"
+          className="app-navigation-hide"
+          aria-label={S.nav.hideNavigation}
+          aria-expanded={true}
+          onClick={() => toggleNav(true)}
+        >
+          <Icon name="collapse" />
+        </Button>
       </div>
       <SideNavigation<LinkProps> hasIcons items={navItems} linkComponent={Link} />
     </div>
   );
 
-
+  const rail = (
+    <nav className="app-rail is-dark" aria-label={S.nav.railLabel} data-testid="app-rail">
+      <Button
+        appearance="link"
+        className="app-rail__item"
+        aria-label={S.nav.showNavigation}
+        aria-expanded={false}
+        onClick={() => toggleNav(false)}
+      >
+        <Icon name="expand" />
+      </Button>
+      <ul className="app-rail__list">
+        {railItems.map((item) => (
+          <li key={item.key}>
+            {item.to ? (
+              <Link className="app-rail__item" to={item.to} title={item.label}>
+                <Icon name={item.icon} />
+                <span className="u-off-screen">{item.label}</span>
+              </Link>
+            ) : (
+              <Button
+                appearance="link"
+                className="app-rail__item"
+                title={item.label}
+                onClick={item.onClick}
+              >
+                {item.glyph ? (
+                  <span className="app-rail__glyph" aria-hidden="true">
+                    {item.glyph}
+                  </span>
+                ) : (
+                  <Icon name={item.icon} />
+                )}
+                <span className="u-off-screen">{item.label}</span>
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
 
   return (
     <>
       <SkipLink mainId="main-content" />
-      {navCollapsed ? (
-        <div className="app-collapsed-bar is-dark">
-          <Button
-            appearance="base"
-            className="app-collapsed-bar__toggle"
-            aria-label={S.nav.showNavigation}
-            aria-expanded={drawerOpen}
-            aria-controls="app-navigation-drawer"
-            onClick={() => setDrawerOpen((open) => !open)}
-          >
-            <Icon name="menu" />
-          </Button>
-          <Logo />
-        </div>
-      ) : null}
       <ApplicationLayout<LinkProps>
         mainId="main-content"
         logo={<Logo />}
@@ -146,20 +210,14 @@ export function Layout({ children }: LayoutProps) {
         // `--dark` marker is how Vanilla themes the icons that predate its
         // theme tokens, so without it they render dark on the dark panel.
         navigationClassName="app-navigation--dark"
-        sideNavigation={navCollapsed ? undefined : navigation(true)}
+        sideNavigation={navCollapsed ? undefined : navigation}
       >
-        <div className="app-content">{children}</div>
+        <div className={`app-content${navCollapsed ? ' app-content--rail' : ''}`}>
+          {children}
+        </div>
         <NotificationConsumer />
       </ApplicationLayout>
-      {navCollapsed ? (
-        <div
-          className={`app-drawer is-dark${drawerOpen ? ' app-drawer--open' : ''}`}
-          id="app-navigation-drawer"
-          data-testid="app-drawer"
-        >
-          {navigation(false)}
-        </div>
-      ) : null}
+      {navCollapsed ? rail : null}
     </>
   );
 }
