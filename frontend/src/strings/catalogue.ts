@@ -118,6 +118,8 @@ export const S = {
     projects: 'Projects',
     needsYou: 'Needs you',
     settings: 'Settings',
+    hideNavigation: 'Hide the navigation menu',
+    showNavigation: 'Show navigation',
   },
   notFound: {
     title: 'Page not found',
