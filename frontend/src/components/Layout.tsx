@@ -12,12 +12,12 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { Logo } from './Logo';
 import { ProjectSelector } from './ProjectSelector';
+import { SignOutNavItem } from './SignOutNavItem';
 import { ThemeNavItem } from './ThemeNavItem';
 import { listProjects } from '../lib/api/projects';
 import { queryKeys, routes, type ProjectSection } from '../lib/routes';
 import { useActiveProject } from '../stores/activeProject';
 import { useAuthStore } from '../stores/auth';
-import { useSession } from '../stores/useSession';
 import { S } from '../strings/catalogue';
 
 interface LayoutProps {
@@ -44,7 +44,6 @@ function readCollapsed(): boolean {
 
 export function Layout({ children }: LayoutProps) {
   const { user } = useAuthStore();
-  const { signOut } = useSession();
   const location = useLocation();
   const { projectId, section, recordRoute } = useActiveProject();
   const segment = sectionForPath(location.pathname);
@@ -90,7 +89,10 @@ export function Layout({ children }: LayoutProps) {
       ],
     },
     {
-      items: [<ThemeNavItem key="theme" />],
+      items: [
+        <ThemeNavItem key="theme" />,
+        ...(user ? [<SignOutNavItem key="sign-out" />] : []),
+      ],
     },
   ];
 
@@ -156,18 +158,6 @@ export function Layout({ children }: LayoutProps) {
         // theme tokens, so without it they render dark on the dark panel.
         navigationClassName="app-navigation--dark"
         sideNavigation={navCollapsed ? undefined : navigation(true)}
-        status={
-          <div className="app-status-bar">
-            {user ? (
-              <>
-                <span className="u-off-screen">{user.name}</span>
-                <Button appearance="link" onClick={() => void signOut()}>
-                  {S.app.signOut}
-                </Button>
-              </>
-            ) : null}
-          </div>
-        }
       >
         <div className="app-content">{children}</div>
         <NotificationConsumer />
