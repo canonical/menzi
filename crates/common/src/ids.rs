@@ -38,6 +38,43 @@ impl std::str::FromStr for SessionId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct WorkspaceId(Uuid);
+
+impl WorkspaceId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    pub fn as_uuid(&self) -> &Uuid {
+        &self.0
+    }
+}
+
+impl Default for WorkspaceId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for WorkspaceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::str::FromStr for WorkspaceId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(Self(Uuid::parse_str(s)?))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct EventId(Ulid);
 
@@ -265,5 +302,19 @@ mod tests {
         assert!("not-a-uuid".parse::<OrgId>().is_err());
         assert!("not-a-uuid".parse::<ProjectId>().is_err());
         assert!("not-a-uuid".parse::<UserId>().is_err());
+        assert!("not-a-uuid".parse::<WorkspaceId>().is_err());
+    }
+
+    #[test]
+    fn workspace_id_new_generates_unique_ids() {
+        assert_ne!(WorkspaceId::new(), WorkspaceId::new());
+    }
+
+    #[test]
+    fn workspace_id_roundtrips() {
+        let uuid = Uuid::new_v4();
+        let id = WorkspaceId::from_uuid(uuid);
+        assert_eq!(format!("{id}"), uuid.to_string());
+        assert_eq!(id.to_string().parse::<WorkspaceId>().unwrap(), id);
     }
 }
