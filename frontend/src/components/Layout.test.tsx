@@ -11,7 +11,6 @@ import { S } from '../strings/catalogue';
 
 const PROJECT = {
   id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-  org_id: 'org-1',
   name: 'Storefront',
   slug: 'storefront',
   description: null,
