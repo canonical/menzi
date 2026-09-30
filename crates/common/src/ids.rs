@@ -97,43 +97,6 @@ impl std::fmt::Display for EventId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct OrgId(Uuid);
-
-impl OrgId {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-
-    pub fn from_uuid(uuid: Uuid) -> Self {
-        Self(uuid)
-    }
-
-    pub fn as_uuid(&self) -> &Uuid {
-        &self.0
-    }
-}
-
-impl Default for OrgId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for OrgId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::str::FromStr for OrgId {
-    type Err = uuid::Error;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Ok(Self(Uuid::parse_str(s)?))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ProjectId(Uuid);
 
 impl ProjectId {
@@ -254,8 +217,8 @@ mod tests {
 
     #[test]
     fn org_id_new_generates_unique_ids() {
-        let id1 = OrgId::new();
-        let id2 = OrgId::new();
+        let id1 = ProjectId::new();
+        let id2 = ProjectId::new();
         assert_ne!(id1, id2);
     }
 
@@ -276,8 +239,8 @@ mod tests {
     #[test]
     fn org_id_from_str_roundtrips() {
         let uuid = Uuid::new_v4();
-        let id = OrgId::from_uuid(uuid);
-        let parsed: OrgId = id.to_string().parse().unwrap();
+        let id = ProjectId::from_uuid(uuid);
+        let parsed: ProjectId = id.to_string().parse().unwrap();
         assert_eq!(parsed, id);
     }
 
@@ -299,7 +262,7 @@ mod tests {
 
     #[test]
     fn id_from_str_rejects_invalid() {
-        assert!("not-a-uuid".parse::<OrgId>().is_err());
+        assert!("not-a-uuid".parse::<ProjectId>().is_err());
         assert!("not-a-uuid".parse::<ProjectId>().is_err());
         assert!("not-a-uuid".parse::<UserId>().is_err());
         assert!("not-a-uuid".parse::<WorkspaceId>().is_err());
