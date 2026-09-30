@@ -33,7 +33,7 @@ export function toolNameOf(part: ToolPart): string {
   return part.tool && part.tool.length > 0 ? part.tool : 'tool';
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
+export function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};

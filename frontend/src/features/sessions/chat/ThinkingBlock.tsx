@@ -1,14 +1,18 @@
 import { Icon } from '@canonical/react-components';
+import { oneLine } from '../../../lib/format/text';
 import type { CompactionPart } from '../../../lib/types';
 import { S } from '../../../strings/catalogue';
+
+const PREVIEW_LIMIT = 72;
 
 export function ThinkingBlock({ text }: { text: string }) {
   if (!text.trim()) return null;
   return (
     <details className="app-thinking">
-      <summary className="app-thinking__summary">
+      <summary className="app-thinking__summary" title={text.trim()}>
         <Icon className="app-thinking__chevron" name="chevron-down" />
-        {S.chatSteps.thinking}
+        <span className="app-thinking__label">{S.chatSteps.thinking}</span>
+        <span className="app-thinking__preview">{oneLine(text, PREVIEW_LIMIT)}</span>
       </summary>
       <p className="app-thinking__body">{text}</p>
     </details>

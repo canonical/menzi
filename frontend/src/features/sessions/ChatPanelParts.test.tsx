@@ -71,6 +71,12 @@ function renderPanel() {
   );
 }
 
+function labelTexts(): string[] {
+  return Array.from(document.querySelectorAll('.app-tc__label')).map(
+    (node) => node.textContent ?? '',
+  );
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
@@ -82,7 +88,7 @@ describe('ChatPanel parts', () => {
     const { container } = renderPanel();
 
     expect(await screen.findByText('Here is what I found.')).toBeInTheDocument();
-    expect(screen.getByText('Reading config.ts')).toBeInTheDocument();
+    expect(labelTexts()).toEqual(['Reading: src/config.ts']);
     expect(screen.getByText('Thinking')).toBeInTheDocument();
     expect(screen.getByText('The port is 8080.')).toBeInTheDocument();
 
@@ -174,8 +180,7 @@ describe('ChatPanel parts', () => {
     ]);
     renderPanel();
     expect(await screen.findByText("I'll run both commands.")).toBeInTheDocument();
-    expect(screen.getByText('Running "echo menzi-tool-probe"')).toBeInTheDocument();
-    expect(screen.getByText('Reading hostname')).toBeInTheDocument();
+    expect(labelTexts()).toEqual(['Running: echo menzi-tool-probe', 'Reading: hostname']);
     expect(screen.getByText('tool-calls')).toBeInTheDocument();
   });
 });

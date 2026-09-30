@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { axe } from 'vitest-axe';
@@ -64,20 +64,43 @@ function makeTool(id: string, tool: string, status: string): ToolPart {
   };
 }
 
+function textOf(selector: string): string {
+  const found = document.querySelector(selector);
+  if (!found) throw new Error(`nothing matched ${selector}`);
+  return found.textContent ?? '';
+}
+
+function detailOf(): HTMLElement {
+  const detail = document.querySelector('.app-tc__detail');
+  if (!detail) throw new Error('the detail panel is not open');
+  return detail as HTMLElement;
+}
+
 describe('ToolCallStep', () => {
   it('renders a prose label for a running tool', () => {
     render(<ToolCallStep part={running} />);
-    expect(screen.getByText('Reading main.rs')).toBeInTheDocument();
+    expect(textOf('.app-tc__label')).toBe('Reading: src/main.rs');
   });
 
   it('describes a real bash call from the opencode payload', () => {
     render(<ToolCallStep part={bashCompleted} />);
-    expect(screen.getByText('Running "echo menzi-tool-probe"')).toBeInTheDocument();
+    expect(textOf('.app-tc__label')).toBe('Running: echo menzi-tool-probe');
+  });
+
+  it('puts the outcome on the same line as the call', () => {
+    render(<ToolCallStep part={bashCompleted} />);
+    expect(textOf('.app-tc__meta')).toBe('exit 0');
+  });
+
+  it('keeps the whole label reachable when it does not fit', () => {
+    render(<ToolCallStep part={running} />);
+    expect(screen.getByTitle('Reading: src/main.rs')).toBeInTheDocument();
   });
 
   it('is not interactive when there is nothing to reveal', () => {
     render(<ToolCallStep part={idle} />);
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(textOf('.app-tc__label')).toBe('Matching files');
   });
 
   it('exposes aria-expanded and reveals input and output when interactive', async () => {
@@ -91,7 +114,7 @@ describe('ToolCallStep', () => {
     expect(button).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Input')).toBeInTheDocument();
     expect(screen.getByText('Result')).toBeInTheDocument();
-    expect(screen.getByText(/src\/main\.rs/)).toBeInTheDocument();
+    expect(within(detailOf()).getByText(/src\/main\.rs/)).toBeInTheDocument();
     expect(screen.getByText('fn main() {}')).toBeInTheDocument();
   });
 
@@ -104,12 +127,15 @@ describe('ToolCallStep', () => {
     expect(output[output.length - 1]?.textContent).toBe('menzi-tool-probe\n');
   });
 
-  it('keeps a failed step in place and shows the error', async () => {
+  it('shows a failure on the line itself, before anything is opened', async () => {
     const user = userEvent.setup();
-    render(<ToolCallStep part={failed} />);
-    expect(screen.getByText('Running "cargo test"')).toBeInTheDocument();
+    const { container } = render(<ToolCallStep part={failed} />);
+    expect(textOf('.app-tc__label')).toBe('Running: cargo test');
+    expect(textOf('.app-tc__meta')).toBe('command not found');
+    expect(container.querySelector('.app-tc__meta--error')).not.toBeNull();
+
     await user.click(screen.getByRole('button'));
-    expect(screen.getByText('command not found')).toBeInTheDocument();
+    expect(within(detailOf()).getByText('command not found')).toBeInTheDocument();
   });
 
   it('truncates a long result and offers to expand it', async () => {
@@ -188,6 +214,22 @@ describe('ThinkingBlock', () => {
     render(<ThinkingBlock text="internal reasoning" />);
     const details = screen.getByText('Thinking').closest('details');
     expect(details?.hasAttribute('open')).toBe(false);
+  });
+
+  it('previews the reasoning on the folded line', () => {
+    const text = 'I should check the routes first\nand then the guard.';
+    render(<ThinkingBlock text={text} />);
+    expect(textOf('.app-thinking__preview')).toBe(
+      'I should check the routes first and then the guard.',
+    );
+    expect(document.querySelector('.app-thinking__summary')?.getAttribute('title')).toBe(text);
+  });
+
+  it('clips a long preview and keeps the whole thing in the tooltip', () => {
+    const text = 'x'.repeat(200);
+    render(<ThinkingBlock text={text} />);
+    expect(textOf('.app-thinking__preview')).toHaveLength(75);
+    expect(document.querySelector('.app-thinking__summary')?.getAttribute('title')).toBe(text);
   });
 
   it('renders nothing for empty reasoning', () => {

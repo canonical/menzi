@@ -21,7 +21,7 @@ export function ToolCallGroup({ parts }: { parts: ToolPart[] }) {
     >
       <summary className="app-tcg__summary">
         <Icon className="app-tcg__chevron" name="chevron-down" />
-        {groupSummary(toolNameOf(parts[0]), parts.length)}
+        <span className="app-tcg__text">{groupSummary(toolNameOf(parts[0]), parts.length)}</span>
       </summary>
       <div className="app-tcg__items">
         {parts.map((part, index) => (
