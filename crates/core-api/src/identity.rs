@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use axum::http::HeaderMap;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Caller {
@@ -242,4 +243,8 @@ mod tests {
         assert!(IDENTITY_HEADERS.contains(&HEADER_SERVICE));
         assert!(!IDENTITY_HEADERS.contains(&HEADER_CREDENTIALS));
     }
+}
+
+pub fn caller_uuid(caller: &Caller) -> Option<Uuid> {
+    caller.user_id().and_then(|id| Uuid::parse_str(id).ok())
 }
