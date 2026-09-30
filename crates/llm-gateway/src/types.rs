@@ -1,4 +1,4 @@
-use menzi_common::ids::{OrgId, ProjectId, SessionId, UserId};
+use menzi_common::ids::{ProjectId, SessionId, UserId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,7 +89,6 @@ pub enum DataClassification {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BudgetStatus {
-    pub org_id: OrgId,
     pub project_id: Option<ProjectId>,
     pub user_id: Option<UserId>,
     pub session_id: Option<SessionId>,
@@ -114,7 +113,6 @@ impl BudgetStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageRecord {
-    pub org_id: OrgId,
     pub project_id: Option<ProjectId>,
     pub user_id: Option<UserId>,
     pub session_id: Option<SessionId>,
@@ -189,7 +187,6 @@ mod tests {
     #[test]
     fn budget_status_not_exceeded_under_budget() {
         let budget = BudgetStatus {
-            org_id: OrgId::new(),
             project_id: None,
             user_id: None,
             session_id: None,
@@ -205,7 +202,6 @@ mod tests {
     #[test]
     fn budget_status_exceeded_at_budget() {
         let budget = BudgetStatus {
-            org_id: OrgId::new(),
             project_id: None,
             user_id: None,
             session_id: None,
@@ -220,7 +216,6 @@ mod tests {
     #[test]
     fn budget_status_not_warning_under_80_percent() {
         let budget = BudgetStatus {
-            org_id: OrgId::new(),
             project_id: None,
             user_id: None,
             session_id: None,
@@ -250,7 +245,6 @@ mod tests {
     #[test]
     fn usage_record_serializes() {
         let record = UsageRecord {
-            org_id: OrgId::new(),
             project_id: None,
             user_id: None,
             session_id: None,
