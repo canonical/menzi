@@ -193,7 +193,13 @@
 
 @media (width >= 64.75rem) {
   .app-split {
-    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  // The review panel is a drawer, not a peer: when it is open the chat keeps a
+  // third of the width and the diff takes the rest.
+  .app-split--review {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   }
 
   // Every step of the workspace chain is allowed to shrink, so the panes end up
