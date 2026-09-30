@@ -326,6 +326,8 @@ export const S = {
     pickTitle: 'Pick a session',
     pickBody: 'Choose a session tab above to read its transcript.',
     sessionsUnavailable: 'The session proxy is not reachable, so session tabs cannot be listed.',
+    showReview: 'Show the code review panel',
+    hideReview: 'Hide the code review panel',
   },
   chat: {
     title: 'Conversation',
