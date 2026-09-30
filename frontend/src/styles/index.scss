@@ -714,12 +714,46 @@
   margin-bottom: 0;
 }
 
-.app-navigation-show {
-  bottom: 3.5rem;
-  left: 1rem;
+// With the navigation collapsed the layout drops its own side panel, so the
+// short bar and the drawer stand in for it. Vanilla only offers that bar below
+// its small-screen breakpoint, and above its large one it forces the panel back
+// open, so neither can be reused at an arbitrary width.
+.app-collapsed-bar {
+  align-items: center;
+  background: var(--vf-color-background-default);
+  display: flex;
+  gap: 0.5rem;
+  height: 3rem;
+  padding: 0 0.5rem;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.app-collapsed-bar__toggle {
+  color: var(--vf-color-x-light);
+  flex: 0 0 auto;
   margin-bottom: 0;
+}
+
+.app-drawer {
+  background: var(--vf-color-background-default);
+  bottom: 0;
+  box-shadow: var(--vf-color-x-light);
+  color: var(--vf-color-x-light);
+  left: 0;
+  overflow-y: auto;
+  padding: 0.5rem;
   position: fixed;
-  z-index: 10;
+  top: 3rem;
+  transform: translateX(-100%);
+  transition: transform 0.2s ease-in-out;
+  width: 15rem;
+  z-index: 15;
+}
+
+.app-drawer--open {
+  transform: translateX(0);
 }
 
 // A side navigation link that is a button rather than a link. Vanilla styles

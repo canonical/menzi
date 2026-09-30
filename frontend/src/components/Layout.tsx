@@ -49,6 +49,7 @@ export function Layout({ children }: LayoutProps) {
   const { projectId, section, recordRoute } = useActiveProject();
   const segment = sectionForPath(location.pathname);
   const [navCollapsed, setNavCollapsed] = useState(readCollapsed);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const toggleNav = useCallback((collapsed: boolean) => {
     setNavCollapsed(collapsed);
@@ -80,7 +81,6 @@ export function Layout({ children }: LayoutProps) {
         project: routes.projects.project(projectId),
       }
     : null;
-
   const navItems: NavItems = [
     {
       items: [
@@ -94,6 +94,8 @@ export function Layout({ children }: LayoutProps) {
     },
   ];
 
+
+
   if (projectPath) {
     navItems.unshift({
       headers: projectName ?? S.sections.project,
@@ -104,10 +106,46 @@ export function Layout({ children }: LayoutProps) {
       ],
     });
   }
+  const navigation = (showCollapse: boolean) => (
+    <div>
+      <div className="app-navigation-selector">
+        <ProjectSelector sectionFor={sectionForPath} />
+        {showCollapse ? (
+          <Button
+            appearance="base"
+            className="app-navigation-hide"
+            aria-label={S.nav.hideNavigation}
+            aria-expanded={true}
+            onClick={() => toggleNav(true)}
+          >
+            <Icon name="collapse" />
+          </Button>
+        ) : null}
+      </div>
+      <SideNavigation<LinkProps> hasIcons items={navItems} linkComponent={Link} />
+    </div>
+  );
+
+
 
   return (
     <>
       <SkipLink mainId="main-content" />
+      {navCollapsed ? (
+        <div className="app-collapsed-bar is-dark">
+          <Button
+            appearance="base"
+            className="app-collapsed-bar__toggle"
+            aria-label={S.nav.showNavigation}
+            aria-expanded={drawerOpen}
+            aria-controls="app-navigation-drawer"
+            onClick={() => setDrawerOpen((open) => !open)}
+          >
+            <Icon name="menu" />
+          </Button>
+          <Logo />
+        </div>
+      ) : null}
       <ApplicationLayout<LinkProps>
         mainId="main-content"
         logo={<Logo />}
@@ -117,24 +155,7 @@ export function Layout({ children }: LayoutProps) {
         // `--dark` marker is how Vanilla themes the icons that predate its
         // theme tokens, so without it they render dark on the dark panel.
         navigationClassName="app-navigation--dark"
-        sideNavigation={
-          navCollapsed ? undefined : (
-            <div>
-              <div className="app-navigation-selector">
-                <ProjectSelector sectionFor={sectionForPath} />
-                <Button
-                  appearance="base"
-                  className="app-navigation-hide"
-                  aria-label={S.nav.hideNavigation}
-                  onClick={() => toggleNav(true)}
-                >
-                  <Icon name="collapse" />
-                </Button>
-              </div>
-              <SideNavigation<LinkProps> hasIcons items={navItems} linkComponent={Link} />
-            </div>
-          )
-        }
+        sideNavigation={navCollapsed ? undefined : navigation(true)}
         status={
           <div className="app-status-bar">
             {user ? (
@@ -149,19 +170,17 @@ export function Layout({ children }: LayoutProps) {
         }
       >
         <div className="app-content">{children}</div>
-        {navCollapsed ? (
-          <Button
-            className="app-navigation-show"
-            aria-label={S.nav.showNavigation}
-            aria-expanded={false}
-            onClick={() => toggleNav(false)}
-          >
-            <Icon name="expand" />
-            {S.nav.showNavigation}
-          </Button>
-        ) : null}
         <NotificationConsumer />
       </ApplicationLayout>
+      {navCollapsed ? (
+        <div
+          className={`app-drawer is-dark${drawerOpen ? ' app-drawer--open' : ''}`}
+          id="app-navigation-drawer"
+          data-testid="app-drawer"
+        >
+          {navigation(false)}
+        </div>
+      ) : null}
     </>
   );
 }

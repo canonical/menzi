@@ -98,36 +98,55 @@ describe('Layout', () => {
     expect(container.querySelector('.l-status')).not.toContainElement(control);
   });
 
-  it('hides the navigation from the top of the menu', async () => {
+  it('collapses the navigation into the short menu bar', async () => {
+    const user = userEvent.setup();
+    const { container } = renderLayout();
+
+    await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
+
+    expect(container.querySelector('.l-navigation')).toBeNull();
+    expect(container.querySelector('.app-collapsed-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('app-drawer')).not.toHaveClass('app-drawer--open');
+  });
+
+  it('opens the drawer from the menu bar', async () => {
     const user = userEvent.setup();
     renderLayout();
 
     await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
+    const toggle = screen.getByRole('button', { name: S.nav.showNavigation });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
-    expect(screen.queryByText(S.nav.projects)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: S.nav.showNavigation })).toBeInTheDocument();
+    await user.click(toggle);
+
+    expect(screen.getByTestId('app-drawer')).toHaveClass('app-drawer--open');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(S.nav.projects)).toBeInTheDocument();
   });
 
-  it('brings the navigation back', async () => {
+  it('does not offer to collapse again from inside the drawer', async () => {
     const user = userEvent.setup();
     renderLayout();
 
     await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
     await user.click(screen.getByRole('button', { name: S.nav.showNavigation }));
 
-    expect(screen.getByText(S.nav.projects)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: S.nav.showNavigation })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: S.nav.hideNavigation })).not.toBeInTheDocument();
   });
 
-  it('remembers the hidden navigation across a remount', async () => {
+  it('keeps the drawer closed on the first render', () => {
+    renderLayout();
+    expect(screen.queryByTestId('app-drawer')).not.toBeInTheDocument();
+  });
+
+  it('remembers the collapsed navigation across a remount', async () => {
     const user = userEvent.setup();
     const { unmount } = renderLayout();
 
     await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
     unmount();
-    renderLayout();
+    const { container } = renderLayout();
 
-    expect(screen.queryByText(S.nav.projects)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: S.nav.showNavigation })).toBeInTheDocument();
+    expect(container.querySelector('.app-collapsed-bar')).toBeInTheDocument();
   });
 });
