@@ -32,31 +32,20 @@ function sectionForPath(pathname: string): ProjectSection {
   return 'code';
 }
 
-const NAV_COLLAPSED_KEY = 'menzi.nav.collapsed';
-
-function readCollapsed(): boolean {
-  try {
-    return localStorage.getItem(NAV_COLLAPSED_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
 export function Layout({ children }: LayoutProps) {
   const { user } = useAuthStore();
   const location = useLocation();
   const { projectId, section, recordRoute } = useActiveProject();
   const segment = sectionForPath(location.pathname);
-  const [navCollapsed, setNavCollapsed] = useState(readCollapsed);
+  // The navigation starts open on every page load. Collapsing it is a way of
+  // getting the chat more room, not a preference worth carrying between visits,
+  // so the choice is deliberately not persisted.
+  const [navCollapsed, setNavCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const toggleNav = useCallback((collapsed: boolean) => {
     setNavCollapsed(collapsed);
-    try {
-      localStorage.setItem(NAV_COLLAPSED_KEY, collapsed ? '1' : '0');
-    } catch {
-      return;
-    }
+    setDrawerOpen(false);
   }, []);
 
   useEffect(() => {
