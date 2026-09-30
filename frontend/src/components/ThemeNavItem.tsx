@@ -31,7 +31,7 @@ export function ThemeNavItem() {
   return (
     <Button
       appearance="link"
-      className="p-side-navigation__link app-theme-nav__button"
+      className="p-side-navigation__link app-nav-button"
       onClick={cycle}
     >
       <span className="p-side-navigation__icon app-theme-nav__glyph" aria-hidden="true">

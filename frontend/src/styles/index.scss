@@ -692,14 +692,6 @@
   white-space: pre;
 }
 
-.app-status-bar {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  justify-content: flex-end;
-}
-
 .app-navigation-selector {
   align-items: center;
   display: flex;
@@ -758,7 +750,7 @@
 
 // A side navigation link that is a button rather than a link. Vanilla styles
 // the link by class, so the element's own button styles are reset here.
-.app-theme-nav__button {
+.app-nav-button {
   background: transparent;
   border: 0;
   cursor: pointer;
