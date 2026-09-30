@@ -265,14 +265,6 @@ export const S = {
       idle: 'Not connected',
     },
   },
-  projectsFirstOrg: {
-    firstOrgTitle: 'Create an organisation',
-    firstOrgBody:
-      'Projects live in an organisation. Create one to get started.',
-    orgName: 'Name',
-    orgSlug: 'Identifier',
-    createOrg: 'Create organisation',
-  },
   projects: {
     selector: {
       label: 'Project',
@@ -282,11 +274,9 @@ export const S = {
       unavailable: 'Projects could not be loaded.',
     },
     title: 'Projects',
-    description: 'Every project you have access to, across all orgs.',
+    description: 'Every project you have access to.',
     searchLabel: 'Search projects',
     searchPlaceholder: 'Search by name or slug',
-    filterLabel: 'Filter by org',
-    filterAll: 'All orgs',
     create: 'New project',
     createTitle: 'Create a project',
     emptyTitle: 'No projects yet',
@@ -294,11 +284,9 @@ export const S = {
     nameLabel: 'Name',
     slugLabel: 'Slug',
     descriptionLabel: 'Description',
-    orgLabel: 'Org',
     columns: {
       name: 'Name',
       slug: 'Slug',
-      org: 'Org',
       updated: 'Updated',
       actions: 'Actions',
     },
@@ -310,8 +298,7 @@ export const S = {
       nameRequired: 'Enter a project name.',
       slugRequired: 'Enter a slug.',
       slugInvalid: 'Use lowercase letters, numbers and hyphens only.',
-      orgRequired: 'Choose an org.',
-      duplicateSlug: 'A project with this slug already exists in this org.',
+      duplicateSlug: 'A project with this slug already exists.',
     },
     toasts: {
       created: 'Project created.',
@@ -323,7 +310,6 @@ export const S = {
       environment: 'Environment',
       created: 'Created',
       updated: 'Updated',
-      org: 'Org',
       slug: 'Slug',
     },
   },
