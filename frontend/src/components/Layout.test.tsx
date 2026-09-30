@@ -8,6 +8,7 @@ import { axe } from 'vitest-axe';
 import { Layout } from './Layout';
 import { axeOptions } from '../testing/axe';
 import { useActiveProject } from '../stores/activeProject';
+import { useAuthStore } from '../stores/auth';
 import { S } from '../strings/catalogue';
 
 const PROJECT = {
@@ -54,10 +55,23 @@ beforeEach(() => {
       if (url.includes('/api/v1/projects')) {
         return Promise.resolve(jsonResponse(200, [PROJECT]));
       }
+      if (url.includes('/api/v1/me')) {
+        return Promise.resolve(
+          jsonResponse(200, { id: 'u1', kind: 'user', email: 'a@b.c', name: 'Ada' }),
+        );
+      }
+      if (url.includes('/api/v1/auth/session')) {
+        return Promise.resolve(
+          jsonResponse(200, {
+            user: { id: 'u1', kind: 'user', email: 'a@b.c', name: 'Ada' },
+          }),
+        );
+      }
       return Promise.resolve(jsonResponse(200, []));
     }),
   );
   useActiveProject.setState({ projectId: '', section: 'code' });
+  useAuthStore.getState().setSession({ id: 'u1', kind: 'user', email: 'a@b.c', name: 'Ada' });
   localStorage.clear();
 });
 
@@ -89,13 +103,33 @@ describe('Layout', () => {
     ).toHaveAttribute('href', `/projects/${PROJECT.id}/design`);
   });
 
-  it('keeps the theme control in the navigation rather than the status bar', async () => {
+  it('keeps the theme control in the navigation and drops the status bar', async () => {
     const { container } = renderLayout();
     const control = await screen.findByRole('button', { name: S.theme.system });
     const nav = container.querySelector('.l-navigation');
 
     expect(nav).toContainElement(control);
-    expect(container.querySelector('.l-status')).not.toContainElement(control);
+    expect(container.querySelector('.l-status')).toBeNull();
+  });
+
+  it('puts the sign out control in the navigation menu', async () => {
+    const { container } = renderLayout();
+    const signOut = await screen.findByRole('button', { name: S.app.signOut });
+    const nav = container.querySelector('.l-navigation');
+
+    expect(nav).toContainElement(signOut);
+  });
+
+  it('offers the sign out control from the collapsed drawer too', async () => {
+    const user = userEvent.setup();
+    renderLayout();
+
+    await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
+    await user.click(screen.getByRole('button', { name: S.nav.showNavigation }));
+
+    expect(screen.getByTestId('app-drawer')).toContainElement(
+      screen.getByRole('button', { name: S.app.signOut }),
+    );
   });
 
   it('collapses the navigation into the short menu bar', async () => {
