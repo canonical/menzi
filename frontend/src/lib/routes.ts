@@ -57,10 +57,6 @@ export const apiPaths = {
     session_: (deviceId: string) => `/api/v1/auth/sessions/${deviceId}`,
     oidcStart: (providerId: string) => `/api/v1/auth/oidc/${providerId}/start`,
   },
-  orgs: {
-    list: () => '/api/v1/orgs',
-    detail: (orgId: string) => `/api/v1/orgs/${orgId}`,
-  },
   projects: {
     list: () => '/api/v1/projects',
     detail: (projectId: string) => `/api/v1/projects/${projectId}`,
@@ -112,14 +108,10 @@ export const queryKeys = {
   session: () => ['session'] as const,
   authProviders: () => ['auth', 'providers'] as const,
   devices: () => ['auth', 'devices'] as const,
-  orgs: {
-    all: () => ['orgs'] as const,
-    detail: (orgId: string) => ['orgs', orgId] as const,
-  },
   projects: {
     all: () => ['projects'] as const,
     filtered: (input: ListProjectsInput) =>
-      ['projects', input.orgId ?? null, input.search ?? null] as const,
+      ['projects', input.search ?? null] as const,
     detail: (projectId: string) => ['projects', projectId] as const,
   },
   previews: {
