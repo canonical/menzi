@@ -261,7 +261,7 @@ fn query_of(url: &str, key: &str) -> String {
 // register
 
 #[tokio::test]
-async fn registering_creates_a_user_with_no_org() {
+async fn registering_creates_a_user() {
     let h = harness(RegistrationMode::Open, false);
     let reply = send(
         app_with(h.state.clone()),
@@ -272,7 +272,6 @@ async fn registering_creates_a_user_with_no_org() {
     .await;
     assert_eq!(reply.status, Code::CREATED);
     let user = user_of(&h, "person@example.com").await;
-    assert!(user.org_id.is_none());
     assert_eq!(user.email, "person@example.com");
 }
 
@@ -652,12 +651,12 @@ async fn the_me_endpoint_returns_the_real_user() {
 }
 
 #[tokio::test]
-async fn the_me_endpoint_reports_a_missing_org_as_null() {
+async fn the_me_endpoint_reports_the_email() {
     let h = harness(RegistrationMode::Open, false);
     let app = app_with(h.state.clone());
     let token = signed_in(&h).await;
     let reply = send_with_cookie(app, "GET", "/api/v1/me", &with_cookie(&token), None).await;
-    assert!(reply.body["org_id"].is_null());
+    assert_eq!(reply.body["email"], "person@example.com");
 }
 
 #[tokio::test]
