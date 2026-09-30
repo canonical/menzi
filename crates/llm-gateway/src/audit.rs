@@ -1,10 +1,9 @@
 use super::types::*;
-use menzi_common::ids::{OrgId, ProjectId, SessionId, UserId};
+use menzi_common::ids::{ProjectId, SessionId, UserId};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
 pub struct LogRequestParams {
-    pub org_id: Option<OrgId>,
     pub project_id: Option<ProjectId>,
     pub user_id: Option<UserId>,
     pub session_id: Option<SessionId>,
@@ -30,7 +29,6 @@ impl AuditLogger {
 
     pub fn log_request(&self, params: LogRequestParams) -> UsageRecord {
         let record = UsageRecord {
-            org_id: params.org_id.unwrap_or_default(),
             project_id: params.project_id,
             user_id: params.user_id,
             session_id: params.session_id,
@@ -70,7 +68,6 @@ mod tests {
     fn audit_logger_creates_usage_record() {
         let logger = AuditLogger::new();
         let record = logger.log_request(LogRequestParams {
-            org_id: None,
             project_id: None,
             user_id: None,
             session_id: None,
@@ -90,7 +87,6 @@ mod tests {
     fn audit_logger_keeps_last_record() {
         let logger = AuditLogger::new();
         logger.log_request(LogRequestParams {
-            org_id: None,
             project_id: None,
             user_id: None,
             session_id: None,
@@ -108,11 +104,9 @@ mod tests {
     #[test]
     fn audit_logger_records_tenant_ids() {
         let logger = AuditLogger::new();
-        let org_id = OrgId::new();
         let project_id = ProjectId::new();
         let user_id = UserId::new();
         logger.log_request(LogRequestParams {
-            org_id: Some(org_id),
             project_id: Some(project_id),
             user_id: Some(user_id),
             session_id: None,
@@ -124,7 +118,6 @@ mod tests {
             cost: 0.01,
         });
         let record = logger.last_record().expect("record recorded");
-        assert_eq!(record.org_id, org_id);
         assert_eq!(record.project_id, Some(project_id));
         assert_eq!(record.user_id, Some(user_id));
     }
