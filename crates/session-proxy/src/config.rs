@@ -111,7 +111,9 @@ mod tests {
         let config = ProxyConfig::default_allowlist();
         assert!(config.allowlist.contains(&"GET /api/session".to_string()));
         assert!(config.allowlist.contains(&"POST /api/session".to_string()));
-        assert!(config.allowlist.contains(&"GET /api/session/:id/message".to_string()));
+        assert!(config
+            .allowlist
+            .contains(&"GET /api/session/:id/message".to_string()));
         assert!(config.allowlist.contains(&"GET /api/event".to_string()));
     }
 

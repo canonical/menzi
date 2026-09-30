@@ -84,7 +84,10 @@ pub async fn create_org(
         return error_response(StatusCode::BAD_REQUEST, "name must not be empty");
     }
     if body.name.trim().len() > MAX_NAME_LENGTH {
-        return error_response(StatusCode::BAD_REQUEST, "name must be at most 120 characters");
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "name must be at most 120 characters",
+        );
     }
     if !valid_slug(&body.slug) {
         return error_response(

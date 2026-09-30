@@ -34,7 +34,17 @@ pub struct ListProjectsQuery {
 
 const MAX_NAME_LENGTH: usize = 120;
 
-fn map_row(row: (String, String, String, String, Option<String>, String, String)) -> ProjectResponse {
+fn map_row(
+    row: (
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+    ),
+) -> ProjectResponse {
     ProjectResponse {
         id: row.0,
         org_id: row.1,
@@ -66,14 +76,29 @@ pub async fn list_projects(
     State(pool): State<PgPool>,
     Query(query): Query<ListProjectsQuery>,
 ) -> Response {
-    let search = query.search.map(|value| format!("%{}%", value.trim().to_lowercase()));
+    let search = query
+        .search
+        .map(|value| format!("%{}%", value.trim().to_lowercase()));
     let org_filter = match query.org_id.as_deref() {
         Some(value) if Uuid::parse_str(value).is_ok() => Some(Uuid::parse_str(value).ok()),
-        Some(_) => return error_response(StatusCode::BAD_REQUEST, "org_id must be a uuid").into_response(),
+        Some(_) => {
+            return error_response(StatusCode::BAD_REQUEST, "org_id must be a uuid").into_response()
+        }
         None => None,
     };
 
-    let rows = sqlx::query_as::<_, (String, String, String, String, Option<String>, String, String)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            String,
+        ),
+    >(
         "SELECT id::text, org_id::text, name, slug, description, created_at::text, \
          updated_at::text FROM projects \
          WHERE ($1::uuid IS NULL OR org_id = $1::uuid) \
@@ -86,7 +111,10 @@ pub async fn list_projects(
     .await;
 
     match rows {
-        Ok(rows) => (StatusCode::OK, Json(rows.into_iter().map(map_row).collect::<Vec<_>>()))
+        Ok(rows) => (
+            StatusCode::OK,
+            Json(rows.into_iter().map(map_row).collect::<Vec<_>>()),
+        )
             .into_response(),
         Err(error) => {
             error_response(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()).into_response()
@@ -137,7 +165,18 @@ pub async fn create_project(
         return error_response(StatusCode::BAD_REQUEST, "org_id must be a uuid");
     }
 
-    let row = sqlx::query_as::<_, (String, String, String, String, Option<String>, String, String)>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            String,
+        ),
+    >(
         "INSERT INTO projects (org_id, name, slug, description) VALUES ($1, $2, $3, $4) \
          RETURNING id::text, org_id::text, name, slug, description, created_at::text, \
          updated_at::text",
@@ -182,7 +221,18 @@ pub async fn get_project(State(pool): State<PgPool>, Path(id): Path<String>) -> 
         return error_response(StatusCode::NOT_FOUND, "project not found");
     }
 
-    let row = sqlx::query_as::<_, (String, String, String, String, Option<String>, String, String)>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            String,
+        ),
+    >(
         "SELECT id::text, org_id::text, name, slug, description, created_at::text, \
          updated_at::text FROM projects WHERE id = $1::uuid",
     )
