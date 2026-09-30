@@ -55,8 +55,11 @@ if command -v lxc >/dev/null 2>&1; then
       -days 3650 -subj "/CN=menzi" -addext "extendedKeyUsage=clientAuth" 2>/dev/null
     echo "generated an lxd client certificate in $HOME/.config/lxc"
   fi
-  fp="$(openssl x509 -in "$HOME/.config/lxc/client.crt" -noout -fingerprint -sha256 | cut -d= -f2)"
-  if ! sudo lxc config trust list --format csv 2>/dev/null | cut -d, -f5 | tr -d ' ' | grep -qF "$fp"; then
+  fp="$(openssl x509 -in "$HOME/.config/lxc/client.crt" -noout -fingerprint -sha256 \
+    | cut -d= -f2 | tr -d ':\n' | tr '[:upper:]' '[:lower:]' | cut -c1-12)"
+  if ! sudo lxc config trust list --format csv 2>/dev/null \
+    | cut -d, -f4 | tr -d '"\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+    | grep -qxF "$fp"; then
     sudo lxc config trust add "$HOME/.config/lxc/client.crt" && echo "trusted the lxd client certificate"
   fi
   export MENZI_LXD_CERT_PATH="${MENZI_LXD_CERT_PATH:-$HOME/.config/lxc/client.crt}"
