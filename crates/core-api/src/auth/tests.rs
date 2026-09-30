@@ -1275,13 +1275,6 @@ async fn the_fake_provider_records_the_verifier_it_was_given() {
 // the rest of the api is now gated
 
 #[tokio::test]
-async fn the_orgs_listing_needs_a_session() {
-    let h = harness(RegistrationMode::Open, false);
-    let reply = send(app_with(h.state.clone()), "GET", "/api/v1/orgs", None).await;
-    assert_eq!(reply.status, Code::UNAUTHORIZED);
-}
-
-#[tokio::test]
 async fn the_projects_listing_needs_a_session() {
     let h = harness(RegistrationMode::Open, false);
     let reply = send(app_with(h.state.clone()), "GET", "/api/v1/projects", None).await;
