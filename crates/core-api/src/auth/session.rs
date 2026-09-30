@@ -14,7 +14,6 @@ pub struct CurrentUser {
     pub email: Option<String>,
     pub name: Option<String>,
     pub avatar_url: Option<String>,
-    pub org_id: Option<String>,
     pub role: Option<String>,
     pub has_password: bool,
 }
