@@ -3,7 +3,9 @@ use axum::Router;
 use sqlx::PgPool;
 use utoipa::OpenApi;
 
+pub mod identity;
 pub mod modules;
+pub mod whoami;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -36,6 +38,7 @@ pub struct ApiDoc;
 pub fn create_router() -> Router<PgPool> {
     Router::new()
         .route("/health", get(modules::health::health_check))
+        .route("/api/v1/me", get(whoami::whoami))
         .route(
             "/api/v1/orgs",
             get(modules::orgs::list_orgs).post(modules::orgs::create_org),
@@ -66,6 +69,26 @@ pub fn create_router() -> Router<PgPool> {
         .route(
             "/api/v1/previews/{id}/restart",
             post(modules::previews_proxy::forward_previews),
+        )
+        .route(
+            "/api/v1/workspaces",
+            post(modules::workspaces_proxy::forward_workspaces),
+        )
+        .route(
+            "/api/v1/workspaces/{user_id}/{project_id}",
+            get(modules::workspaces_proxy::forward_workspaces)
+                .post(modules::workspaces_proxy::forward_workspaces)
+                .delete(modules::workspaces_proxy::forward_workspaces),
+        )
+        .route(
+            "/api/v1/workspaces/{user_id}/{project_id}/{*rest}",
+            get(modules::workspaces_proxy::forward_workspaces)
+                .post(modules::workspaces_proxy::forward_workspaces)
+                .delete(modules::workspaces_proxy::forward_workspaces),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/workspaces",
+            get(modules::workspaces_proxy::forward_workspaces),
         )
 }
 

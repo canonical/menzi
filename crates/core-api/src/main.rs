@@ -12,10 +12,14 @@ async fn main() {
         .await
         .expect("Failed to connect to database");
 
-    let proxy = Arc::new(menzi_core_api::modules::previews_proxy::PreviewProxy::from_env());
+    let previews = Arc::new(menzi_core_api::modules::previews_proxy::PreviewProxy::from_env());
+    let workspaces =
+        Arc::new(menzi_core_api::modules::workspaces_proxy::WorkspaceProxy::from_env());
 
     let app = menzi_core_api::create_router()
-        .layer(axum::extract::Extension(proxy))
+        .layer(axum::extract::Extension(workspaces.caller_resolver()))
+        .layer(axum::extract::Extension(previews))
+        .layer(axum::extract::Extension(workspaces))
         .with_state(db.pool().clone());
 
     info!("Listening on {}", config.gateway_bind);
