@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NotificationProvider } from '@canonical/react-components';
@@ -125,6 +125,29 @@ describe('ChatPanel', () => {
     renderWithClient(<ChatPanel sessionId={SESSION} />);
     expect(await screen.findByText(S.chat.emptyTitle)).toBeInTheDocument();
   });
+
+  it('offers a jump to the latest chip once the reader scrolls up', async () => {
+    mockApi(MESSAGES);
+    const user = userEvent.setup();
+    renderWithClient(<ChatPanel sessionId={SESSION} />);
+    await screen.findByText('Added GET /health returning ok.');
+
+    const scroller = screen.getByTestId('chat-scroll');
+    Object.defineProperties(scroller, {
+      scrollHeight: { value: 1000, configurable: true },
+      clientHeight: { value: 400, configurable: true },
+    });
+    expect(screen.queryByRole('button', { name: S.chat.jumpToLatest })).not.toBeInTheDocument();
+
+    act(() => {
+      scroller.scrollTop = 0;
+      fireEvent.scroll(scroller);
+    });
+    await user.click(screen.getByRole('button', { name: S.chat.jumpToLatest }));
+
+    expect(scroller.scrollTop).toBe(1000);
+    expect(screen.queryByRole('button', { name: S.chat.jumpToLatest })).not.toBeInTheDocument();
+  });
 });
 
 describe('Composer', () => {
@@ -140,5 +163,52 @@ describe('Composer', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).toEqual({ parts: [{ type: 'text', text: 'hello agent' }] });
     expect(screen.getByRole('textbox')).toHaveValue('');
+  });
+
+  it('sends on Enter so the single line input is enough', async () => {
+    const sent: unknown[] = [];
+    mockApi(MESSAGES, (body) => sent.push(body));
+    const user = userEvent.setup();
+    renderWithClient(<Composer sessionId={SESSION} />);
+
+    await user.type(screen.getByRole('textbox'), 'ship it{Enter}');
+
+    expect(sent).toEqual([{ parts: [{ type: 'text', text: 'ship it' }] }]);
+    expect(screen.getByRole('textbox')).toHaveValue('');
+  });
+
+  it('shows a spinner and the sending name while the prompt is in flight', async () => {
+    // never resolves, so the pending state stays observable
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('/message') && (init?.method ?? 'GET') === 'POST') {
+          return new Promise(() => undefined);
+        }
+        if (url.includes('/message')) return Promise.resolve(jsonResponse(200, MESSAGES));
+        return Promise.resolve(jsonResponse(404, { error: 'no route' }));
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<Composer sessionId={SESSION} />);
+
+    await user.type(screen.getByRole('textbox'), 'long running{Enter}');
+
+    const send = await screen.findByRole('button', { name: S.chat.sending });
+    expect(send).toHaveAttribute('aria-disabled', 'true');
+    expect(send).not.toHaveTextContent(S.chat.send);
+  });
+
+  it('keeps the send button named for assistive technology', async () => {
+    mockApi(MESSAGES);
+    renderWithClient(<Composer sessionId={SESSION} />);
+
+    // The button shows an icon only, so the name has to come from a label.
+    const send = screen.getByRole('button', { name: S.chat.send });
+    expect(send).toHaveTextContent('');
+    expect(screen.getByLabelText(S.chat.label)).toBe(
+      screen.getByRole('textbox', { name: S.chat.label }),
+    );
   });
 });

@@ -1,9 +1,11 @@
+import { useLayoutEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Chip } from '@canonical/react-components';
+import { Button, Chip } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
 import { listMessages } from '../../lib/api/opencode';
 import { getErrorMessage } from '../../lib/api/errors';
 import { queryKeys } from '../../lib/routes';
+import { useStickyScroll } from '../../hooks/useStickyScroll';
 import {
   isCompactionPart,
   isReasoningPart,
@@ -92,68 +94,93 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
     refetchInterval: 15000,
   });
 
+  const { ref: scrollRef, stuck, handleScroll, follow, jumpToLatest } = useStickyScroll<HTMLDivElement>();
+
   const visible = (messagesQuery.data?.messages ?? []).filter(
     (message) => message.info.role === 'user' || message.info.role === 'assistant',
   );
 
+  // Streamed parts grow the transcript without changing this component's props,
+  // so follow the bottom after every render rather than on a message count.
+  useLayoutEffect(() => {
+    follow();
+  });
+
   return (
-    <section className="app-section">
+    <section className="app-section app-code__chat-panel">
       <h2 className="app-panel-heading">{S.chat.title}</h2>
-      <DataState
-        loading={messagesQuery.isLoading}
-        error={messagesQuery.error ? getErrorMessage(messagesQuery.error) : null}
-        empty={!messagesQuery.isLoading && !messagesQuery.error && visible.length === 0}
-        emptyIcon="comment"
-        emptyTitle={S.chat.emptyTitle}
-        emptyBody={S.chat.emptyBody}
-        onRetry={() => messagesQuery.refetch()}
+      <div
+        className="app-chat-scroll"
+        ref={scrollRef}
+        onScroll={handleScroll}
+        tabIndex={-1}
+        data-testid="chat-scroll"
       >
-        <ul className="app-chat-list">
-          {visible.map((message) => {
-            const info = message.info;
-            const isUser = info.role === 'user';
-            const label = modelLabel(info);
-            const failure = errorText(info);
-            return (
-              <li
-                key={info.id}
-                className={`app-chat-turn${isUser ? ' app-chat-turn--user' : ''}`}
-                data-testid={`msg-${info.role}`}
-              >
-                <div className="app-chat-turn__meta">
-                  <span className="app-chat-turn__author">
-                    {isUser ? S.chat.you : (info.agent ?? S.chat.agent)}
-                  </span>
-                  {label ? (
-                    <Chip
-                      className="u-margin--left u-no-margin--bottom"
-                      value={label}
-                      appearance="information"
-                      isReadOnly
-                      isDense
-                    />
+        <DataState
+          loading={messagesQuery.isLoading}
+          error={messagesQuery.error ? getErrorMessage(messagesQuery.error) : null}
+          empty={!messagesQuery.isLoading && !messagesQuery.error && visible.length === 0}
+          emptyIcon="quote"
+          emptyTitle={S.chat.emptyTitle}
+          emptyBody={S.chat.emptyBody}
+          onRetry={() => messagesQuery.refetch()}
+        >
+          <ul className="app-chat-list">
+            {visible.map((message) => {
+              const info = message.info;
+              const isUser = info.role === 'user';
+              const label = modelLabel(info);
+              const failure = errorText(info);
+              return (
+                <li
+                  key={info.id}
+                  className={`app-chat-turn${isUser ? ' app-chat-turn--user' : ''}`}
+                  data-testid={`msg-${info.role}`}
+                >
+                  <div className="app-chat-turn__meta">
+                    <span className="app-chat-turn__author">
+                      {isUser ? S.chat.you : (info.agent ?? S.chat.agent)}
+                    </span>
+                    {label ? (
+                      <Chip
+                        className="u-margin--left u-no-margin--bottom"
+                        value={label}
+                        appearance="information"
+                        isReadOnly
+                        isDense
+                      />
+                    ) : null}
+                    {info.finish ? (
+                      <Chip
+                        className="u-margin--left u-no-margin--bottom"
+                        value={info.finish}
+                        appearance={finishAppearance(info)}
+                        isReadOnly
+                        isDense
+                      />
+                    ) : null}
+                  </div>
+                  <MessageParts parts={message.parts ?? []} />
+                  {failure ? (
+                    <p className="p-form-validation__message" data-testid="msg-error">
+                      {failure}
+                    </p>
                   ) : null}
-                  {info.finish ? (
-                    <Chip
-                      className="u-margin--left u-no-margin--bottom"
-                      value={info.finish}
-                      appearance={finishAppearance(info)}
-                      isReadOnly
-                      isDense
-                    />
-                  ) : null}
-                </div>
-                <MessageParts parts={message.parts ?? []} />
-                {failure ? (
-                  <p className="p-form-validation__message" data-testid="msg-error">
-                    {failure}
-                  </p>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      </DataState>
+                </li>
+              );
+            })}
+          </ul>
+        </DataState>
+      </div>
+      {stuck ? null : (
+        <Button
+          className="app-jump-latest"
+          dense
+          onClick={jumpToLatest}
+        >
+          {S.chat.jumpToLatest}
+        </Button>
+      )}
     </section>
   );
 }
