@@ -16,6 +16,7 @@ pub struct CurrentUser {
     pub avatar_url: Option<String>,
     pub org_id: Option<String>,
     pub role: Option<String>,
+    pub has_password: bool,
 }
 
 pub async fn me(

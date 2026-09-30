@@ -30,6 +30,20 @@ export const S = {
     registrationClosed:
       'This deployment is not accepting new accounts. Ask an administrator for an invitation.',
     signOutEverywhere: 'Sign out everywhere',
+    accountHeading: 'Account',
+    noEmail: 'No email on this account',
+    passwordHeading: 'Password',
+    currentPassword: 'Current password',
+    passwordChanged: 'Your password was changed.',
+    noPassword:
+      'This account signs in with a provider, so it has no password to change.',
+    devicesHeading: 'Signed in devices',
+    thisDevice: 'This device',
+    unknownDevice: 'Unknown device',
+    lastSeen: 'Last seen {when}',
+    revoke: 'Sign out',
+    deviceRevoked: 'That device was signed out.',
+    deviceRevokeFailed: 'Could not sign that device out',
   },
   theme: {
     system: 'Auto',

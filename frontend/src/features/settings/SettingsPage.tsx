@@ -10,8 +10,10 @@ import {
   useNotify,
 } from '@canonical/react-components';
 import { S } from '../../strings/catalogue';
+import { AccountSection } from './AccountSection';
 
 const SETTINGS_TABS = [
+  { id: 'account', label: S.auth.accountHeading },
   { id: 'profile', label: S.settings.tabs.profile },
   { id: 'models', label: S.settings.tabs.modelAccounts },
   { id: 'notifications', label: S.settings.tabs.notifications },
@@ -20,7 +22,7 @@ const SETTINGS_TABS = [
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function SettingsPage() {
-  const [activeTab, setActiveTab] = useState(SETTINGS_TABS[0].id);
+  const [activeTab, setActiveTab] = useState('account');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [nameError, setNameError] = useState<string | null>(null);
@@ -59,6 +61,7 @@ export function SettingsPage() {
       />
       <div className="p-card">
         <div className="p-card__content">
+          {activeTab === 'account' && <AccountSection />}
           {activeTab === 'profile' && (
             <Form onSubmit={handleSubmit}>
               <Input

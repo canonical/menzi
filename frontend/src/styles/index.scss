@@ -723,3 +723,33 @@
 .app-auth__provider {
   width: 100%;
 }
+
+.app-account {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.app-account__devices {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.app-account__device {
+  align-items: center;
+  border-bottom: 1px solid var(--vf-color-border-low-contrast);
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+}
+
+.app-account__device-provider {
+  display: block;
+}
+
+.app-empty-org {
+  margin: 0 auto;
+  max-width: 30rem;
+  padding: 3rem 1rem;
+}

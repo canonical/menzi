@@ -8,6 +8,7 @@ export interface CurrentUser {
   avatar_url?: string | null;
   org_id?: string | null;
   role?: string | null;
+  has_password?: boolean;
 }
 
 export async function getCurrentUser(): Promise<CurrentUser> {

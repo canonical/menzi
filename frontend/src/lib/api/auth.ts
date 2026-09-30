@@ -9,6 +9,7 @@ export interface AuthUser {
   avatar_url?: string | null;
   org_id?: string | null;
   role?: string | null;
+  has_password?: boolean;
 }
 
 export interface Session {

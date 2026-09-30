@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NotificationProvider } from '@canonical/react-components';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { axe } from 'vitest-axe';
 import { axeOptions } from '../../testing/axe';
@@ -8,10 +10,27 @@ import { SettingsPage } from './SettingsPage';
 import { S } from '../../strings/catalogue';
 
 function renderPage() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => JSON.stringify({ devices: [] }),
+      json: async () => ({ devices: [] }),
+    }),
+  );
   return render(
-    <NotificationProvider>
-      <SettingsPage />
-    </NotificationProvider>,
+    <QueryClientProvider client={client}>
+      <NotificationProvider>
+        <MemoryRouter>
+          <SettingsPage />
+        </MemoryRouter>
+      </NotificationProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -21,6 +40,10 @@ function getForm(): HTMLFormElement {
   return form;
 }
 
+async function openProfileTab() {
+  await userEvent.click(screen.getByRole('tab', { name: S.settings.tabs.profile }));
+}
+
 describe('SettingsPage', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -28,6 +51,7 @@ describe('SettingsPage', () => {
 
   it('validates the profile form', async () => {
     const { container } = renderPage();
+    await openProfileTab();
     fireEvent.submit(getForm());
     expect(screen.getByText(S.settings.profile.errors.nameRequired)).toBeInTheDocument();
     expect(screen.getByText(S.settings.profile.errors.emailInvalid)).toBeInTheDocument();
@@ -37,6 +61,7 @@ describe('SettingsPage', () => {
   it('saves a valid profile', () => {
     vi.useFakeTimers();
     renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: S.settings.tabs.profile }));
     fireEvent.change(screen.getByLabelText(S.settings.profile.nameLabel), {
       target: { value: 'Ada' },
     });
