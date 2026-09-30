@@ -19,6 +19,10 @@ chrono.workspace = true
 reqwest.workspace = true
 async-trait.workspace = true
 clap.workspace = true
+base64.workspace = true
+argon2 = "0.6"
+rand = "0.9"
+sha2 = "0.10"
 
 [dev-dependencies]
 tower.workspace = true
