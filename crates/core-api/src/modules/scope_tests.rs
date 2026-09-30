@@ -1,4 +1,4 @@
-//! The org and project routes only ever answer for a caller.
+//! The project routes only ever answer for a caller.
 
 use crate::identity::Caller;
 use crate::modules::membership::{denied, PostgresScope, ScopeError, ScopedRead};
@@ -26,14 +26,8 @@ impl ScopedRead for Nothing {
             .and_then(|id| Uuid::parse_str(id).ok())
             .ok_or(ScopeError::NoCaller)
     }
-    async fn assert_org(&self, _: &Caller, _: Uuid) -> Result<(), ScopeError> {
-        Ok(())
-    }
     async fn assert_project(&self, _: &Caller, _: Uuid) -> Result<(), ScopeError> {
         Ok(())
-    }
-    async fn list_orgs(&self, _: &Caller) -> Result<Vec<Uuid>, ScopeError> {
-        Ok(Vec::new())
     }
     async fn list_projects(&self, _: &Caller) -> Result<Vec<Uuid>, ScopeError> {
         Ok(Vec::new())
@@ -82,35 +76,6 @@ async fn a_user_caller_yields_its_uuid() {
 }
 
 #[tokio::test]
-async fn a_caller_may_only_read_the_org_it_owns() {
-    let (store, scope) = roles();
-    let user = Uuid::new_v4();
-    let mine = Uuid::new_v4();
-    let theirs = Uuid::new_v4();
-    store.set_org_for(user, mine);
-
-    assert!(scope
-        .assert_org(&caller(&user.to_string()), mine)
-        .await
-        .is_ok());
-    assert!(matches!(
-        scope.assert_org(&caller(&user.to_string()), theirs).await,
-        Err(ScopeError::WrongOrg)
-    ));
-}
-
-#[tokio::test]
-async fn a_caller_with_no_org_owns_none() {
-    let (_store, scope) = roles();
-    assert!(matches!(
-        scope
-            .assert_org(&caller(&Uuid::new_v4().to_string()), Uuid::new_v4())
-            .await,
-        Err(ScopeError::WrongOrg)
-    ));
-}
-
-#[tokio::test]
 async fn project_membership_is_what_gates_a_project() {
     let (store, scope) = roles();
     let user = Uuid::new_v4();
@@ -145,7 +110,6 @@ async fn an_owner_may_read_the_project() {
 #[tokio::test]
 async fn the_errors_map_onto_distinct_statuses() {
     assert_eq!(ScopeError::NoCaller.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(ScopeError::WrongOrg.status(), StatusCode::FORBIDDEN);
     assert_eq!(ScopeError::WrongProject.status(), StatusCode::FORBIDDEN);
 }
 
