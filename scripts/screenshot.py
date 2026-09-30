@@ -7,15 +7,34 @@ from playwright.sync_api import sync_playwright
 BASE = "http://127.0.0.1:5173"
 OUT = "/tmp/opencode/shots"
 VIEWPORT = {"width": 1600, "height": 1000}
+COOKIE = "menzi-dev-session"
+EMAIL = "ada@acme.example"
+PASSWORD = "menzi-development-password"
 
 
 def api(path, method="GET", payload=None, timeout=600):
     data = json.dumps(payload).encode() if payload is not None else None
     request = urllib.request.Request(f"{BASE}{path}", data=data, method=method)
+    request.add_header("Cookie", f"menzi_session={COOKIE}")
     if data:
         request.add_header("content-type", "application/json")
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode())
+
+
+def sign_in():
+    request = urllib.request.Request(
+        f"{BASE}/api/v1/auth/login",
+        data=json.dumps({"email": EMAIL, "password": PASSWORD}).encode(),
+        method="POST",
+    )
+    request.add_header("content-type", "application/json")
+    with urllib.request.urlopen(request, timeout=60) as response:
+        response.read()
+        raw = response.headers.get("set-cookie", "")
+    if not raw:
+        raise RuntimeError("login did not set a session cookie")
+    return raw.split(";")[0].split("=", 1)[1]
 
 
 def seed_conversation():
@@ -58,6 +77,9 @@ def main():
     import os
 
     os.makedirs(OUT, exist_ok=True)
+    global COOKIE
+    COOKIE = sign_in()
+    print(f"signed in as {EMAIL}")
     session_id = seed_conversation()
     print(f"session={session_id}")
 
@@ -73,6 +95,16 @@ def main():
     with sync_playwright() as play:
         browser = play.chromium.launch(args=["--no-sandbox"])
         context = browser.new_context(viewport=VIEWPORT, device_scale_factor=2)
+        context.add_cookies(
+            [
+                {
+                    "name": "menzi_session",
+                    "value": COOKIE,
+                    "domain": "127.0.0.1",
+                    "path": "/",
+                }
+            ]
+        )
         page = context.new_page()
         page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
         page.on("pageerror", lambda e: errors.append(str(e)))
