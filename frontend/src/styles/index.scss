@@ -706,46 +706,56 @@
   margin-bottom: 0;
 }
 
-// With the navigation collapsed the layout drops its own side panel, so the
-// short bar and the drawer stand in for it. Vanilla only offers that bar below
-// its small-screen breakpoint, and above its large one it forces the panel back
-// open, so neither can be reused at an arbitrary width.
-.app-collapsed-bar {
-  align-items: center;
-  background: var(--vf-color-background-default);
-  display: flex;
-  gap: 0.5rem;
-  height: 3rem;
-  padding: 0 0.5rem;
-  position: sticky;
-  top: 0;
-  z-index: 20;
-}
-
-.app-collapsed-bar__toggle {
-  color: var(--vf-color-x-light);
-  flex: 0 0 auto;
-  margin-bottom: 0;
-}
-
-.app-drawer {
+// With the navigation collapsed the layout drops its own side panel, and a
+// narrow icon rail stands in for it on the left. Vanilla only offers that rail
+// between its small and large breakpoints, and above the large one it forces
+// the panel back open, so it cannot be reused at an arbitrary width.
+.app-rail {
   background: var(--vf-color-background-default);
   bottom: 0;
-  box-shadow: var(--vf-color-x-light);
   color: var(--vf-color-x-light);
   left: 0;
   overflow-y: auto;
-  padding: 0.5rem;
+  padding: 0.25rem 0;
   position: fixed;
-  top: 3rem;
-  transform: translateX(-100%);
-  transition: transform 0.2s ease-in-out;
-  width: 15rem;
+  top: 0;
+  width: 3rem;
   z-index: 15;
 }
 
-.app-drawer--open {
-  transform: translateX(0);
+.app-rail__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.app-rail__item {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  height: 2.5rem;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  text-decoration: none;
+  width: 100%;
+}
+
+.app-rail__item:hover,
+.app-rail__item:focus-visible {
+  background: var(--vf-color-background-hover);
+}
+
+.app-rail__glyph {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.app-content--rail {
+  padding-left: 3rem;
 }
 
 // A side navigation link that is a button rather than a link. Vanilla styles
