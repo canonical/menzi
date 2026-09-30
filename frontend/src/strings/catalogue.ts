@@ -251,6 +251,14 @@ export const S = {
       idle: 'Not connected',
     },
   },
+  projectsFirstOrg: {
+    firstOrgTitle: 'Create an organisation',
+    firstOrgBody:
+      'Projects live in an organisation. Create one to get started.',
+    orgName: 'Name',
+    orgSlug: 'Identifier',
+    createOrg: 'Create organisation',
+  },
   projects: {
     selector: {
       label: 'Project',

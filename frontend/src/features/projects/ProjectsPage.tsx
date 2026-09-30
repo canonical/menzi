@@ -15,6 +15,7 @@ import {
 } from '@canonical/react-components';
 import type { MainTableProps } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
+import { NoOrgState } from './NoOrgState';
 import { createProject, listOrgs, listProjects } from '../../lib/api/projects';
 import { getErrorMessage, isApiError } from '../../lib/api/errors';
 import { queryKeys, routes } from '../../lib/routes';
@@ -61,6 +62,9 @@ export function ProjectsPage() {
       notify.failure(S.projects.toasts.failed, error, getErrorMessage(error)),
   });
 
+  const hasNoOrg =
+    !orgsQuery.isLoading && !orgsQuery.error && (orgsQuery.data?.length ?? 0) === 0;
+
   const orgNames = new Map((orgsQuery.data ?? []).map((org) => [org.id, org.name]));
 
   const rows: Row[] = (projectsQuery.data ?? []).map((project) => ({
@@ -97,6 +101,10 @@ export function ProjectsPage() {
       },
     ],
   }));
+
+  if (hasNoOrg) {
+    return <NoOrgState />;
+  }
 
   return (
     <div className="app-section">

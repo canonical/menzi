@@ -16,7 +16,7 @@ export async function getProject(projectId: string): Promise<Project> {
 
 export async function createProject(input: CreateProjectInput): Promise<Project> {
   return http.post<Project>(apiPaths.projects.list(), {
-    org_id: input.orgId,
+    org_id: input.orgId ?? null,
     name: input.name,
     slug: input.slug,
     description: input.description ?? null,
@@ -25,4 +25,8 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
 
 export async function listOrgs(): Promise<Org[]> {
   return http.get<Org[]>(apiPaths.orgs.list());
+}
+
+export async function createOrg(input: { name: string; slug: string }): Promise<Org> {
+  return http.post<Org>(apiPaths.orgs.list(), { name: input.name, slug: input.slug });
 }
