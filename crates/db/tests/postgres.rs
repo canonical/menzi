@@ -39,10 +39,9 @@ async fn cleanup_database(admin_url: &str, name: &str) {
         .expect("drop test database");
 }
 
-const MIGRATION_COUNT: i64 = 4;
+const MIGRATION_COUNT: i64 = 8;
 
 const EXPECTED_TABLES: &[&str] = &[
-    "orgs",
     "users",
     "projects",
     "project_members",
