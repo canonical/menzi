@@ -1222,6 +1222,43 @@ cargo test --workspace
 cd frontend && npm run lint && npm run build && npm run test
 ```
 
+## Verified against a running stack
+
+Run against a real Postgres with migration 007 applied, using a real Argon2id
+hash and a real httpOnly cookie jar.
+
+| Check | Result |
+| --- | --- |
+| `GET /health` with no cookie | 200 |
+| `GET /api/v1/auth/providers` with no cookie | 200, `{"registration":"open","password":true,"oidc":[]}` |
+| `GET /api/v1/me` with no cookie | 401 |
+| `POST /api/v1/auth/login` with the right password | 200, sets `menzi_session` (HttpOnly) and `menzi_csrf` (readable) |
+| `GET /api/v1/me` with the cookie | 200, the real user including `email`, `org_id` and `role` |
+| `GET /api/v1/me` with a spoofed `x-menzi-user-id` | 200, still the cookie's user. The header is stripped, not trusted. |
+| `GET /api/v1/orgs` | only the caller's org |
+| `GET /api/v1/orgs/{someone-elses}` | 404 |
+| `GET /api/v1/projects` | only projects the caller is a member of |
+| `GET /api/v1/auth/sessions` | the caller's devices, exactly one marked current |
+| `POST /api/v1/projects` with no CSRF header | 403 |
+| `POST /api/v1/projects` with the CSRF header | 201, and the new project is then listed |
+| A newly registered user, `GET /api/v1/orgs` | `[]` |
+| A newly registered user, `GET /api/v1/projects` | `[]` |
+| A newly registered user creating an org | 201, and it is then their only org |
+| A newly registered user creating a project with no `org_id` | 201, in the org they just created |
+| `POST /api/v1/auth/logout` | 200, and the session stops resolving |
+| Wrong password | 401 |
+| Password under the minimum | 400 |
+| Duplicate email | 409 |
+| Unknown email on `forgot` | 202, and no mail is sent |
+| OIDC start with no provider configured | 404 |
+
+`role` was `owner` for the seeded user, read from `project_members` and advisory
+until authorization lands.
+
+A second user was registered to prove the scoping: it saw no orgs and no
+projects, and after creating both saw only its own. That is the `list_orgs` leak
+the plan called out, now closed. Both rows were removed afterwards.
+
 ## Gotchas
 
 - **The outer `.layer()` is outermost.** A gating layer on the outer router
@@ -1250,21 +1287,35 @@ cd frontend && npm run lint && npm run build && npm run test
 - **The route inventory test fails on any new route.** Regenerate in the same
   commit.
 
-## Open questions
+## What was implemented, and what is still open
 
-1. **Registration mode in production.** `closed` is the default here. Whether
-   production is `open` or invite-only is a product call.
-2. **Should register return 409 on a taken email?** It enumerates accounts. The
+Implemented as described. The remaining gaps, honestly:
+
+1. **Registration mode in production.** `closed` is the code's default;
+   `dev.sh` sets `open` because a login page nobody can reach is untestable.
+   Whether production is `open` or invite-only is a product call.
+2. **Register answers 409 on a taken email.** It enumerates accounts. The
    alternatives are 202 plus a "check your email" flow, which needs a real
    mailer, or always-202, which is confusing for a normal signup.
-3. **Session lifetime.** 30 days with a 7 day idle timeout is a guess. Shorter
-   sessions with refresh need a refresh-token table and a rotation policy, which
-   this plan does not cover.
-4. **Linking an OIDC identity to an existing password account.** Refused in v1
-   per D4. The emailed one-time code is the real answer and is not in this plan.
-5. **Whether authorization lands alongside this.** `menzi-auth` already has
-   `Role` and `Permission` and nothing calls them. Once sessions are real,
-   enforcing project roles on the core-api project routes is a small follow-up,
-   and better as its own change.
-6. **`dev.sh` and the seeded user.** It has no password. Either the seed creates
-   a known development password, or every developer registers on first run.
+3. **Session lifetime.** 30 days with a 7 day idle timeout, as a guess.
+   Shorter sessions with refresh need a refresh-token table and a rotation
+   policy, which this does not cover.
+4. **Linking an OIDC identity to an existing password account.** Refused, per
+   D4, with a message pointing at Settings. The Settings flow and the emailed
+   one-time code are not built, so that message currently sends the user
+   somewhere that cannot help yet. The refusal is the safe half of the answer.
+5. **Password reset is a stub.** `forgot` always answers 202 and never
+   enumerates, which is correct, but `LogMailer` writes the link to the log and
+   `complete_reset` only validates its arguments. No password can actually be
+   reset by email yet.
+6. **Authorization is not enforced.** `Role` and `Permission` exist in
+   `menzi-auth` and `/api/v1/me` reports a role, but nothing gates on it. Org
+   and project reads are scoped to membership, which is the floor; per-role
+   permissions on writes are a separate change.
+7. **OIDC is exercised only against a fake provider.** The discovery, PKCE
+   challenge, state single-use, nonce check and D4 rules are all covered by
+   tests, and `RustOidcProvider` compiles against RustOIDC, but no real
+   provider has completed a flow. `MENZI_OIDC_PROVIDERS` with a Google entry is
+   the configuration; it has not been run against Google.
+8. **`invite` mode behaves as `closed`,** because the invite table does not
+   exist. A configurable-but-unimplemented mode is worse than an absent one.

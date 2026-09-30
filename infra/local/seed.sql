@@ -39,11 +39,16 @@ VALUES (
 )
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO users (id, org_id, email, name)
+-- ada@acme.example signs in with the password "menzi-development-password".
+-- The hash below is Argon2id of that exact string; the dollar signs are
+-- doubled so psql does not read them as variables.
+INSERT INTO users (id, org_id, email, name, password_hash, email_verified_at)
 VALUES (
   'dddddddd-dddd-dddd-dddd-dddddddddddd',
   '11111111-1111-1111-1111-111111111111',
   'ada@acme.example',
-  'Ada Lovelace'
+  'Ada Lovelace',
+  '@@argon2id@@v=19@@m=19456,t=2,p=1@@9/pbJcGCERy1X+w9fEMkOA@@8i/pfn4tTaPhc0CmqghSIvszfbSa/6gUNDvEd7lCxEU',
+  now()
 )
 ON CONFLICT (id) DO NOTHING;

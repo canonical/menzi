@@ -61,16 +61,26 @@ if [ -z "${MENZI_LXD_CERT_PATH:-}" ] && [ -f "$HOME/.config/lxc/client.crt" ] &&
   export MENZI_LXD_KEY_PATH="$HOME/.config/lxc/client.key"
 fi
 
-# core-api strips any identity header a browser sends and sets its own from the
-# verified caller. There is no token store yet, so development runs on a fixed
-# user rather than pretending a browser is authenticated.
-if [ "${MENZI_DEV_AUTH:-1}" = "1" ] && [ -z "${MENZI_DEV_USER_ID:-}" ]; then
+# A browser is authenticated with a cookie, so the login page is the normal
+# path. The development bypass is opt-in because a silent bypass is what makes
+# a login page look broken in front of a demo.
+export MENZI_REGISTRATION_MODE="${MENZI_REGISTRATION_MODE:-open}"
+export MENZI_PUBLIC_BASE_URL="${MENZI_PUBLIC_BASE_URL:-http://${DEV_HOST}:${VITE_PORT}}"
+
+if [ "${MENZI_DEV_AUTH:-0}" = "1" ] && [ -z "${MENZI_DEV_USER_ID:-}" ]; then
   DEV_USER_ID="$(PGPASSWORD=menzi psql -tA -h 127.0.0.1 -U menzi -d menzi \
     -c 'SELECT id FROM users ORDER BY created_at LIMIT 1' 2>/dev/null || true)"
   if [ -n "$DEV_USER_ID" ]; then
-    export MENZI_DEV_AUTH=1
     export MENZI_DEV_USER_ID="$DEV_USER_ID"
+  else
+    printf 'warning: MENZI_DEV_AUTH=1 but the database has no user; sign in will fail\n' >&2
   fi
+fi
+
+if [ "${MENZI_DEV_AUTH:-0}" = "1" ]; then
+  printf 'dev auth: every request is %s\n' "${MENZI_DEV_USER_ID:-nobody}" >&2
+else
+  printf 'dev auth: cookie sign-in at %s/login\n' "$MENZI_PUBLIC_BASE_URL" >&2
 fi
 
 PIDS=()
@@ -85,6 +95,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 setsid env MENZI_DATABASE_URL="$DB_URL" MENZI_WORKSPACE_URL="http://${WORKSPACE_BIND/0.0.0.0/$WAIT_HOST}" \
+  MENZI_REGISTRATION_MODE="$MENZI_REGISTRATION_MODE" MENZI_PUBLIC_BASE_URL="$MENZI_PUBLIC_BASE_URL" \
+  ${MENZI_DEV_USER_ID:+MENZI_DEV_USER_ID="$MENZI_DEV_USER_ID"} \
+  ${MENZI_OIDC_PROVIDERS:+MENZI_OIDC_PROVIDERS="$MENZI_OIDC_PROVIDERS"} \
+  ${MENZI_MAILER:+MENZI_MAILER="$MENZI_MAILER"} \
   "$ROOT/target/debug/menzi-core-api" >"$LOG_DIR/core-api.log" 2>&1 &
 PIDS+=("$!")
 setsid env MENZI_GATEWAY_BIND="$ORCH_BIND" "$ROOT/target/debug/menzi-orchestrator" >"$LOG_DIR/orchestrator.log" 2>&1 &
