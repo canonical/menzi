@@ -6,7 +6,6 @@ export interface CurrentUser {
   email?: string | null;
   name?: string | null;
   avatar_url?: string | null;
-  org_id?: string | null;
   role?: string | null;
   has_password?: boolean;
 }
