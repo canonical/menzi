@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createProject, getProject, listOrgs, listProjects } from './projects';
+import { createProject, getProject, listProjects } from './projects';
 
 const PROJECT = {
   id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-  org_id: '11111111-1111-1111-1111-111111111111',
   name: 'Storefront',
   slug: 'storefront',
   description: 'Customer facing app',
@@ -35,18 +34,18 @@ describe('projects api', () => {
     expect(url).toBe('/api/v1/projects');
   });
 
-  it('passes org and search filters as query parameters', async () => {
+  it('passes the search filter as a query parameter', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, []));
     vi.stubGlobal('fetch', fetchMock);
-    await listProjects({ orgId: 'org-1', search: 'store' });
+    await listProjects({ search: 'store' });
     const [url] = fetchMock.mock.calls[0];
-    expect(url).toBe('/api/v1/projects?org_id=org-1&search=store');
+    expect(url).toBe('/api/v1/projects?search=store');
   });
 
   it('omits empty filters', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, []));
     vi.stubGlobal('fetch', fetchMock);
-    await listProjects({ orgId: '', search: '' });
+    await listProjects({ search: '' });
     const [url] = fetchMock.mock.calls[0];
     expect(url).toBe('/api/v1/projects');
   });
@@ -62,12 +61,11 @@ describe('projects api', () => {
   it('creates a project with snake_case fields', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, PROJECT));
     vi.stubGlobal('fetch', fetchMock);
-    await createProject({ orgId: 'org-1', name: 'Storefront', slug: 'storefront' });
+    await createProject({ name: 'Storefront', slug: 'storefront' });
     const [url, options] = fetchMock.mock.calls[0];
     expect(url).toBe('/api/v1/projects');
     expect(options.method).toBe('POST');
     expect(JSON.parse(options.body)).toEqual({
-      org_id: 'org-1',
       name: 'Storefront',
       slug: 'storefront',
       description: null,
@@ -78,18 +76,11 @@ describe('projects api', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
-        jsonResponse(409, { error: 'a project with this slug already exists in this org' }),
+        jsonResponse(409, { error: 'a project with this slug already exists' }),
       ),
     );
     await expect(
-      createProject({ orgId: 'org-1', name: 'Storefront', slug: 'storefront' }),
+      createProject({ name: 'Storefront', slug: 'storefront' }),
     ).rejects.toMatchObject({ status: 409 });
-  });
-
-  it('lists orgs', async () => {
-    const orgs = [{ id: 'org-1', name: 'Acme', slug: 'acme' }];
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, orgs));
-    vi.stubGlobal('fetch', fetchMock);
-    await expect(listOrgs()).resolves.toEqual(orgs);
   });
 });
