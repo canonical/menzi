@@ -164,6 +164,17 @@ describe('CodePage', () => {
     expect(screen.getByLabelText(S.chat.label)).toBeInTheDocument();
   });
 
+  it('drops the visible code and conversation labels from the chat page', async () => {
+    mockApi({ sessions: [{ id: SESSION_A, time: { updated: 1790000000000 } }] });
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}`);
+
+    await screen.findByText('hello agent');
+    expect(screen.queryByText(S.review.title)).not.toBeInTheDocument();
+    expect(document.querySelector('.app-panel-heading')).toBeNull();
+    const heading = screen.getByRole('heading', { level: 1, name: S.sections.code });
+    expect(heading).toHaveClass('u-off-screen');
+  });
+
   it('keeps the review panel closed until it is asked for', async () => {
     mockApi({ sessions: [{ id: SESSION_A, time: { updated: 1790000000000 } }] });
     renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}`);
