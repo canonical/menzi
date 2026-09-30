@@ -69,6 +69,14 @@
   gap: 0.5rem;
 }
 
+// The code page has no visible title: the chat starts just under a short row of
+// controls, so the header gives up its bottom margin and the tabs follow on.
+.app-page-header--compact {
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 0.75rem;
+}
+
 .app-toolbar {
   display: flex;
   flex-direction: column;
@@ -693,8 +701,25 @@
 }
 
 .app-navigation-selector {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
   padding-bottom: 0.75rem;
   padding-top: 0.5rem;
+}
+
+.app-navigation-hide {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+}
+
+.app-navigation-show {
+  bottom: 3.5rem;
+  left: 1rem;
+  margin-bottom: 0;
+  position: fixed;
+  z-index: 10;
 }
 
 // A side navigation link that is a button rather than a link. Vanilla styles
