@@ -216,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn org_id_new_generates_unique_ids() {
+    fn project_id_new_generates_unique_ids() {
         let id1 = ProjectId::new();
         let id2 = ProjectId::new();
         assert_ne!(id1, id2);
@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn org_id_from_str_roundtrips() {
+    fn project_id_from_str_roundtrips() {
         let uuid = Uuid::new_v4();
         let id = ProjectId::from_uuid(uuid);
         let parsed: ProjectId = id.to_string().parse().unwrap();
