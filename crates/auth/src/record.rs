@@ -4,7 +4,6 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserRecord {
     pub id: Uuid,
-    pub org_id: Option<Uuid>,
     pub email: String,
     pub name: String,
     pub avatar_url: Option<String>,
@@ -80,19 +79,6 @@ pub fn normalise_email(email: &str) -> String {
 mod tests {
     use super::*;
 
-    fn user() -> UserRecord {
-        UserRecord {
-            id: Uuid::new_v4(),
-            org_id: None,
-            email: "person@example.com".to_string(),
-            name: "Person".to_string(),
-            avatar_url: None,
-            password_hash: None,
-            email_verified_at: None,
-            created_at: Utc::now(),
-        }
-    }
-
     fn session(expires_at: DateTime<Utc>) -> SessionRecord {
         SessionRecord {
             id: Uuid::new_v4(),
@@ -104,11 +90,6 @@ mod tests {
             user_agent: None,
             ip: None,
         }
-    }
-
-    #[test]
-    fn a_user_record_carries_no_org_when_registered() {
-        assert!(user().org_id.is_none());
     }
 
     #[test]
