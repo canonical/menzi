@@ -12,7 +12,6 @@ import { S } from '../../strings/catalogue';
 const PROJECTS = [
   {
     id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-    org_id: 'org-1',
     name: 'Storefront',
     slug: 'storefront',
     description: 'Customer facing app',
@@ -21,18 +20,12 @@ const PROJECTS = [
   },
   {
     id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-    org_id: 'org-2',
     name: 'Billing Service',
     slug: 'billing-service',
     description: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-03T00:00:00Z',
   },
-];
-
-const ORGS = [
-  { id: 'org-1', name: 'Acme Corp', slug: 'acme' },
-  { id: 'org-2', name: 'Globex', slug: 'globex' },
 ];
 
 function jsonResponse(status: number, body: unknown) {
@@ -81,7 +74,6 @@ function renderPage() {
 }
 
 const defaultHandlers = (): Record<string, Handler> => ({
-  '/api/v1/orgs': () => jsonResponse(200, ORGS),
   '/api/v1/projects': () => jsonResponse(200, PROJECTS),
 });
 
@@ -91,23 +83,19 @@ afterEach(() => {
 });
 
 describe('ProjectsPage', () => {
-  it('lists projects with their org names', async () => {
+  it('lists the projects the caller is a member of', async () => {
     mockApi(defaultHandlers());
     const { container } = renderPage();
     expect(await screen.findByText('Storefront')).toBeInTheDocument();
     expect(screen.getByText('Billing Service')).toBeInTheDocument();
     const table = within(screen.getByRole('grid'));
-    expect(table.getByText('Acme Corp')).toBeInTheDocument();
-    expect(table.getByText('Globex')).toBeInTheDocument();
     expect(table.getByText('storefront')).toBeInTheDocument();
+    expect(table.getByText('billing-service')).toBeInTheDocument();
     expect(await axe(container, axeOptions)).toHaveNoViolations();
   });
 
   it('shows an empty state when there are no projects', async () => {
-    mockApi({
-      '/api/v1/orgs': () => jsonResponse(200, ORGS),
-      '/api/v1/projects': () => jsonResponse(200, []),
-    });
+    mockApi({ '/api/v1/projects': () => jsonResponse(200, []) });
     renderPage();
     expect(await screen.findByText(S.projects.emptyTitle)).toBeInTheDocument();
   });
@@ -115,10 +103,9 @@ describe('ProjectsPage', () => {
   it('re-queries with the search term', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('/api/v1/orgs')) {
-        return Promise.resolve(jsonResponse(200, ORGS));
-      }
-      return Promise.resolve(jsonResponse(200, url.includes('search=bill') ? [PROJECTS[1]] : PROJECTS));
+      return Promise.resolve(
+        jsonResponse(200, url.includes('search=bill') ? [PROJECTS[1]] : PROJECTS),
+      );
     });
     vi.stubGlobal('fetch', fetchMock);
     renderPage();
@@ -149,18 +136,10 @@ describe('ProjectsPage', () => {
     await user.click(confirmButtons[confirmButtons.length - 1]);
 
     expect(await screen.findByText(S.projects.errors.nameRequired)).toBeInTheDocument();
-    expect(screen.queryByText(S.projects.errors.orgRequired)).not.toBeInTheDocument();
   });
 
-  it('preselects the only org so it does not have to be chosen', async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/api/v1/orgs')) {
-        return Promise.resolve(jsonResponse(200, [ORGS[0]]));
-      }
-      return Promise.resolve(jsonResponse(200, [PROJECTS[0]]));
-    });
-    vi.stubGlobal('fetch', fetchMock);
+  it('rejects a slug with the wrong characters', async () => {
+    mockApi(defaultHandlers());
     const user = userEvent.setup();
     renderPage();
     await screen.findByText('Storefront');
@@ -168,16 +147,22 @@ describe('ProjectsPage', () => {
     const [openButton] = await screen.findAllByRole('button', { name: S.projects.create });
     await user.click(openButton);
 
-    expect(await screen.findByLabelText(S.projects.orgLabel)).toHaveValue('org-1');
+    fireEvent.change(await screen.findByLabelText(S.projects.nameLabel), {
+      target: { value: 'Payments' },
+    });
+    fireEvent.change(screen.getByLabelText(S.projects.slugLabel), {
+      target: { value: 'Not A Slug' },
+    });
+
+    const confirmButtons = await screen.findAllByRole('button', { name: S.projects.create });
+    await user.click(confirmButtons[confirmButtons.length - 1]);
+
+    expect((await screen.findAllByText(S.projects.errors.slugInvalid)).length).toBeGreaterThan(0);
   });
 
-  it('creates a project with a single org without touching the dropdown', async () => {
+  it('creates a project without asking for an org', async () => {
     const posted: unknown[] = [];
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/api/v1/orgs')) {
-        return Promise.resolve(jsonResponse(200, [ORGS[0]]));
-      }
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
       if ((init?.method ?? 'GET') === 'POST') {
         posted.push(JSON.parse(String(init?.body)));
         return Promise.resolve(jsonResponse(201, PROJECTS[0]));
@@ -200,69 +185,15 @@ describe('ProjectsPage', () => {
     await user.click(confirmButtons[confirmButtons.length - 1]);
 
     await waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]).toMatchObject({ org_id: 'org-1', name: 'Payments' });
-  });
-
-  it('preselects the first org when there are several', async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/api/v1/orgs')) {
-        return Promise.resolve(jsonResponse(200, ORGS));
-      }
-      return Promise.resolve(jsonResponse(200, [PROJECTS[0]]));
+    expect(posted[0]).toEqual({
+      name: 'Payments',
+      slug: 'payments',
+      description: null,
     });
-    vi.stubGlobal('fetch', fetchMock);
-    const user = userEvent.setup();
-    renderPage();
-    await screen.findByText('Storefront');
-
-    const [openButton] = await screen.findAllByRole('button', { name: S.projects.create });
-    await user.click(openButton);
-
-    expect(await screen.findByLabelText(S.projects.orgLabel)).toHaveValue('org-1');
-  });
-
-  it('still lets a second org be chosen', async () => {
-    const posted: unknown[] = [];
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/api/v1/orgs')) {
-        return Promise.resolve(jsonResponse(200, ORGS));
-      }
-      if ((init?.method ?? 'GET') === 'POST') {
-        posted.push(JSON.parse(String(init?.body)));
-        return Promise.resolve(jsonResponse(201, PROJECTS[0]));
-      }
-      return Promise.resolve(jsonResponse(200, [PROJECTS[0]]));
-    });
-    vi.stubGlobal('fetch', fetchMock);
-    const user = userEvent.setup();
-    renderPage();
-    await screen.findByText('Storefront');
-
-    const [openButton] = await screen.findAllByRole('button', { name: S.projects.create });
-    await user.click(openButton);
-
-    fireEvent.change(await screen.findByLabelText(S.projects.nameLabel), {
-      target: { value: 'Payments' },
-    });
-    fireEvent.change(screen.getByLabelText(S.projects.orgLabel), {
-      target: { value: 'org-2' },
-    });
-
-    const confirmButtons = await screen.findAllByRole('button', { name: S.projects.create });
-    await user.click(confirmButtons[confirmButtons.length - 1]);
-
-    await waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]).toMatchObject({ org_id: 'org-2' });
   });
 
   it('creates a project and refreshes the list', async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/api/v1/orgs')) {
-        return Promise.resolve(jsonResponse(200, ORGS));
-      }
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
       if ((init?.method ?? 'GET') === 'POST') {
         return Promise.resolve(jsonResponse(201, PROJECTS[0]));
       }
@@ -278,9 +209,6 @@ describe('ProjectsPage', () => {
 
     fireEvent.change(await screen.findByLabelText(S.projects.nameLabel), {
       target: { value: 'Payments' },
-    });
-    fireEvent.change(screen.getByLabelText(S.projects.orgLabel), {
-      target: { value: 'org-1' },
     });
 
     const confirmButtons = await screen.findAllByRole('button', { name: S.projects.create });
