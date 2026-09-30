@@ -1251,6 +1251,13 @@ hash and a real httpOnly cookie jar.
 | Duplicate email | 409 |
 | Unknown email on `forgot` | 202, and no mail is sent |
 | OIDC start with no provider configured | 404 |
+| `GET /api/v1/me` reports `has_password` | true for the seeded user |
+| `POST /api/v1/auth/password/change` with the current password | 200, and the caller stays signed in |
+| `GET /api/v1/auth/sessions` after a change | the other sessions remain listed but no longer resolve |
+| `DELETE /api/v1/auth/sessions/{other}` | 200, and that session stops resolving |
+| `POST /api/v1/auth/password/change` with the wrong current password | 401 |
+| Login with the previous password after a change | 401 |
+| Login with the new password after a change | 200 |
 
 `role` was `owner` for the seeded user, read from `project_members` and advisory
 until authorization lands.
