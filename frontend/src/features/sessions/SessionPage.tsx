@@ -15,7 +15,7 @@ import {
   ThemeSwitcher,
   type SideNavigationProps,
 } from '@canonical/react-components';
-import { useAuthStore } from '../../stores/auth';
+import { useSession } from '../../stores/useSession';
 import { Logo } from '../../components/Logo';
 import { EnvPanel } from './EnvPanel';
 import { TranscriptView } from './TranscriptView';
@@ -60,7 +60,7 @@ type NavItems = NonNullable<SideNavigationProps<LinkProps>['items']>;
 export function SessionPage() {
   const { projectId, sessionId } = useParams<{ projectId: string; sessionId: string }>();
   const [activeTab, setActiveTab] = useState('env');
-  const { logout } = useAuthStore();
+  const { signOut } = useSession();
 
   const sessionKnown = UUID_PATTERN.test(sessionId ?? '');
 
@@ -94,7 +94,7 @@ export function SessionPage() {
                   {projectId ? `${S.session.title}: ${projectId}` : S.session.title}
                 </SidePanel.HeaderTitle>
                 <SidePanel.HeaderControls>
-                  <Button appearance="link" onClick={logout}>
+                  <Button appearance="link" onClick={() => void signOut()}>
                     {S.app.signOut}
                   </Button>
                 </SidePanel.HeaderControls>

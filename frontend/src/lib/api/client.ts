@@ -4,10 +4,24 @@ const BASE_URL = import.meta.env.VITE_API_URL || '';
 
 export const UNAUTHORIZED_EVENT = 'menzi:unauthorized';
 
+const CSRF_COOKIE = 'menzi_csrf';
+const CSRF_HEADER = 'x-menzi-csrf';
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 interface ApiErrorBody {
   error?: { message?: string; code?: string } | string;
   message?: string;
   code?: string;
+}
+
+export function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  for (const part of document.cookie.split(';')) {
+    const [key, ...rest] = part.trim().split('=');
+    if (key === name) return rest.join('=');
+  }
+  return null;
 }
 
 async function parseError(response: Response): Promise<ApiError> {
@@ -29,20 +43,23 @@ async function parseError(response: Response): Promise<ApiError> {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = localStorage.getItem('menzi_token');
+  const method = options.method ?? 'GET';
   const headers = new Headers(options.headers);
   headers.set('Content-Type', 'application/json');
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
+
+  if (!SAFE_METHODS.has(method.toUpperCase())) {
+    const csrf = readCookie(CSRF_COOKIE);
+    if (csrf) headers.set(CSRF_HEADER, csrf);
   }
 
-  const response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+  const response = await fetch(`${BASE_URL}${path}`, {
+    ...options,
+    headers,
+    credentials: 'include',
+  });
 
-  if (response.status === 401) {
-    localStorage.removeItem('menzi_token');
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-    }
+  if (response.status === 401 && typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   }
 
   if (!response.ok) {

@@ -15,6 +15,13 @@ export const routes = {
   inbox: () => '/inbox',
   admin: () => '/admin',
   settings: () => '/settings',
+  auth: {
+    login: () => '/login',
+    register: () => '/register',
+    forgot: () => '/forgot-password',
+    reset: () => '/reset-password',
+    callback: () => '/auth/callback',
+  },
 };
 
 export type ProjectSection = 'code' | 'design' | 'project';
@@ -37,6 +44,19 @@ export function projectSectionPath(projectId: string, section: ProjectSection): 
 }
 
 export const apiPaths = {
+  auth: {
+    providers: () => '/api/v1/auth/providers',
+    session: () => '/api/v1/auth/session',
+    login: () => '/api/v1/auth/login',
+    register: () => '/api/v1/auth/register',
+    logout: () => '/api/v1/auth/logout',
+    forgot: () => '/api/v1/auth/password/forgot',
+    reset: () => '/api/v1/auth/password/reset',
+    changePassword: () => '/api/v1/auth/password/change',
+    sessions: () => '/api/v1/auth/sessions',
+    session_: (deviceId: string) => `/api/v1/auth/sessions/${deviceId}`,
+    oidcStart: (providerId: string) => `/api/v1/auth/oidc/${providerId}/start`,
+  },
   orgs: {
     list: () => '/api/v1/orgs',
     detail: (orgId: string) => `/api/v1/orgs/${orgId}`,
@@ -89,6 +109,9 @@ export const apiPaths = {
 };
 
 export const queryKeys = {
+  session: () => ['session'] as const,
+  authProviders: () => ['auth', 'providers'] as const,
+  devices: () => ['auth', 'devices'] as const,
   orgs: {
     all: () => ['orgs'] as const,
     detail: (orgId: string) => ['orgs', orgId] as const,

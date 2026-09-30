@@ -13,8 +13,13 @@ syncTheme();
 watchSystemTheme(syncTheme);
 
 window.addEventListener(UNAUTHORIZED_EVENT, () => {
-  useAuthStore.getState().logout();
-  window.location.href = '/';
+  useAuthStore.getState().clear();
+  if (!window.location.pathname.startsWith('/login')) {
+    const target = encodeURIComponent(
+      window.location.pathname + window.location.search,
+    );
+    window.location.replace(`/login?from=${target}`);
+  }
 });
 
 createRoot(document.getElementById('root')!).render(
@@ -24,5 +29,5 @@ createRoot(document.getElementById('root')!).render(
         <App />
       </NotificationProvider>
     </QueryClientProvider>
-  </StrictMode>
+  </StrictMode>,
 );

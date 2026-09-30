@@ -1,29 +1,18 @@
 import { create } from 'zustand';
-import type { User } from '../lib/types';
+import type { AuthUser } from '../lib/api/auth';
+
+export type SessionStatus = 'loading' | 'authenticated' | 'anonymous';
 
 interface AuthState {
-  user: User | null;
-  token: string | null;
-  isAuthenticated: boolean;
-  login: (token: string, user: User) => void;
-  setUser: (id: string) => void;
-  logout: () => void;
+  user: AuthUser | null;
+  recorded: boolean;
+  setSession: (user: AuthUser | null) => void;
+  clear: () => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
-  token: localStorage.getItem('menzi_token'),
-  isAuthenticated: !!localStorage.getItem('menzi_token'),
-  login: (token, user) => {
-    localStorage.setItem('menzi_token', token);
-    set({ token, user, isAuthenticated: true });
-  },
-  setUser: (id) =>
-    set((state) => ({
-      user: { ...(state.user ?? { email: '', name: '' }), id },
-    })),
-  logout: () => {
-    localStorage.removeItem('menzi_token');
-    set({ token: null, user: null, isAuthenticated: false });
-  },
+  recorded: false,
+  setSession: (user) => set({ user, recorded: true }),
+  clear: () => set({ user: null, recorded: true }),
 }));

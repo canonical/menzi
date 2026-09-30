@@ -3,7 +3,7 @@ import { BrowserRouter, Outlet, Route, Routes } from 'react-router-dom';
 import { Spinner } from '@canonical/react-components';
 import { Layout } from './components/Layout';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { useCurrentUser } from './stores/useCurrentUser';
+import { RequireAnonymous, RequireAuth } from './components/RequireAuth';
 import { S } from './strings/catalogue';
 
 function lazyPage(name: string, loader: () => Promise<Record<string, ComponentType>>) {
@@ -24,6 +24,20 @@ const InboxPage = lazyPage('InboxPage', () => import('./features/inbox/InboxPage
 const AdminPage = lazyPage('AdminPage', () => import('./features/admin/AdminPage'));
 const SettingsPage = lazyPage('SettingsPage', () => import('./features/settings/SettingsPage'));
 const NotFoundPage = lazyPage('NotFoundPage', () => import('./features/notfound/NotFoundPage'));
+const LoginPage = lazyPage('LoginPage', () => import('./features/auth/LoginPage'));
+const RegisterPage = lazyPage('RegisterPage', () => import('./features/auth/RegisterPage'));
+const ForgotPasswordPage = lazyPage(
+  'ForgotPasswordPage',
+  () => import('./features/auth/ForgotPasswordPage'),
+);
+const ResetPasswordPage = lazyPage(
+  'ResetPasswordPage',
+  () => import('./features/auth/ResetPasswordPage'),
+);
+const AuthCallbackPage = lazyPage(
+  'AuthCallbackPage',
+  () => import('./features/auth/AuthCallbackPage'),
+);
 
 function PageFallback() {
   return (
@@ -34,7 +48,6 @@ function PageFallback() {
 }
 
 function AppShell() {
-  useCurrentUser();
   return (
     <ErrorBoundary>
       <Layout>
@@ -56,32 +69,53 @@ function WorkspaceShell() {
   );
 }
 
+function AuthShell() {
+  return (
+    <ErrorBoundary>
+      <Suspense fallback={<PageFallback />}>
+        <Outlet />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route element={<AppShell />}>
-          <Route path="/" element={<ProjectsPage />} />
-          <Route path="/projects" element={<ProjectsPage />} />
-          <Route path="/projects/:projectId" element={<ProjectsPage />} />
-          <Route path="/projects/:projectId/code" element={<CodePage />} />
-          <Route path="/projects/:projectId/design" element={<DesignPage />} />
-          <Route path="/projects/:projectId/project" element={<ProjectPage />} />
-          <Route
-            path="/workspaces/:workspaceId/environment"
-            element={<EnvironmentPage />}
-          />
-          <Route path="/projects/:projectId/previews" element={<PreviewsPage />} />
-          <Route path="/inbox" element={<InboxPage />} />
-          <Route path="/admin" element={<AdminPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="*" element={<NotFoundPage />} />
+        <Route element={<RequireAuth />}>
+          <Route element={<AppShell />}>
+            <Route path="/" element={<ProjectsPage />} />
+            <Route path="/projects" element={<ProjectsPage />} />
+            <Route path="/projects/:projectId" element={<ProjectsPage />} />
+            <Route path="/projects/:projectId/code" element={<CodePage />} />
+            <Route path="/projects/:projectId/design" element={<DesignPage />} />
+            <Route path="/projects/:projectId/project" element={<ProjectPage />} />
+            <Route
+              path="/workspaces/:workspaceId/environment"
+              element={<EnvironmentPage />}
+            />
+            <Route path="/projects/:projectId/previews" element={<PreviewsPage />} />
+            <Route path="/inbox" element={<InboxPage />} />
+            <Route path="/admin" element={<AdminPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Route>
+          <Route element={<WorkspaceShell />}>
+            <Route
+              path="/projects/:projectId/sessions/:sessionId"
+              element={<SessionPage />}
+            />
+          </Route>
         </Route>
-        <Route element={<WorkspaceShell />}>
-          <Route
-            path="/projects/:projectId/sessions/:sessionId"
-            element={<SessionPage />}
-          />
+        <Route element={<RequireAnonymous />}>
+          <Route element={<AuthShell />}>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/auth/callback" element={<AuthCallbackPage />} />
+          </Route>
         </Route>
       </Routes>
     </BrowserRouter>

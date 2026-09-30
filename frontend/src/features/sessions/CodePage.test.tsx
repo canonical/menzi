@@ -121,9 +121,13 @@ function renderPage(path: string) {
 beforeEach(() => {
   localStorage.clear();
   useAuthStore.setState({
-    user: { id: USER_ID, email: 'ada@acme.example', name: 'Ada Lovelace' },
-    token: 'token-123',
-    isAuthenticated: true,
+    user: {
+      id: USER_ID,
+      kind: 'user',
+      email: 'ada@acme.example',
+      name: 'Ada Lovelace',
+    },
+    recorded: true,
   });
 });
 

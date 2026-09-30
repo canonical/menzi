@@ -123,10 +123,20 @@ describe('SessionPage', () => {
   });
 
   it('does not query the orchestrator for a session id that is not a uuid', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { success: true, data: STATE }));
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input).includes('/api/v1/auth/session')) {
+        return Promise.resolve(
+          jsonResponse(200, { user: { id: 'u1', kind: 'user', email: 'a@b' } }),
+        );
+      }
+      return Promise.resolve(jsonResponse(200, { success: true, data: STATE }));
+    });
     vi.stubGlobal('fetch', fetchMock);
     renderPage('not-a-uuid');
     expect(screen.queryByLabelText(S.env.environmentLabel)).not.toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
+    const orchestratorCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).includes('/api/env'),
+    );
+    expect(orchestratorCalls).toHaveLength(0);
   });
 });

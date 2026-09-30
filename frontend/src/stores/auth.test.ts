@@ -1,36 +1,46 @@
-import { beforeEach, describe, expect, it } from 'vitest'
-import { useAuthStore } from './auth'
-import type { User } from '../lib/types'
+import { beforeEach, describe, expect, it } from 'vitest';
+import { useAuthStore } from './auth';
+import type { AuthUser } from '../lib/api/auth';
 
-const user: User = { id: 'u1', email: 'ada@example.com', name: 'Ada' }
+const user: AuthUser = {
+  id: 'u1',
+  kind: 'user',
+  email: 'ada@example.com',
+  name: 'Ada',
+};
 
 beforeEach(() => {
-  useAuthStore.setState({ user: null, token: null, isAuthenticated: false })
-  localStorage.clear()
-})
+  useAuthStore.setState({ user: null, recorded: false });
+});
 
 describe('auth store', () => {
-  it('starts unauthenticated', () => {
-    expect(useAuthStore.getState().isAuthenticated).toBe(false)
-    expect(useAuthStore.getState().token).toBeNull()
-  })
+  it('starts with nothing known about the caller', () => {
+    expect(useAuthStore.getState().user).toBeNull();
+    expect(useAuthStore.getState().recorded).toBe(false);
+  });
 
-  it('logs in and persists the token', () => {
-    useAuthStore.getState().login('tok-1', user)
-    const state = useAuthStore.getState()
-    expect(state.isAuthenticated).toBe(true)
-    expect(state.token).toBe('tok-1')
-    expect(state.user).toEqual(user)
-    expect(localStorage.getItem('menzi_token')).toBe('tok-1')
-  })
+  it('records a resolved user', () => {
+    useAuthStore.getState().setSession(user);
+    expect(useAuthStore.getState().user).toEqual(user);
+    expect(useAuthStore.getState().recorded).toBe(true);
+  });
 
-  it('logs out and clears the session', () => {
-    useAuthStore.getState().login('tok-1', user)
-    useAuthStore.getState().logout()
-    const state = useAuthStore.getState()
-    expect(state.isAuthenticated).toBe(false)
-    expect(state.token).toBeNull()
-    expect(state.user).toBeNull()
-    expect(localStorage.getItem('menzi_token')).toBeNull()
-  })
-})
+  it('records the absence of a user', () => {
+    useAuthStore.getState().setSession(null);
+    expect(useAuthStore.getState().user).toBeNull();
+    expect(useAuthStore.getState().recorded).toBe(true);
+  });
+
+  it('clears back to anonymous', () => {
+    useAuthStore.getState().setSession(user);
+    useAuthStore.getState().clear();
+    expect(useAuthStore.getState().user).toBeNull();
+    expect(useAuthStore.getState().recorded).toBe(true);
+  });
+
+  it('holds no credential of its own', () => {
+    const state = useAuthStore.getState() as unknown as Record<string, unknown>;
+    expect(state.token).toBeUndefined();
+    expect(localStorage.getItem('menzi_token')).toBeNull();
+  });
+});

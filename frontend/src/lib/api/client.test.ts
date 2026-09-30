@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
-import { http, UNAUTHORIZED_EVENT } from './client'
+import { http, readCookie, UNAUTHORIZED_EVENT } from './client'
 import { ApiError } from './errors'
 
 function jsonResponse(status: number, body: unknown, statusText = 'OK') {
@@ -15,8 +15,16 @@ function jsonResponse(status: number, body: unknown, statusText = 'OK') {
 
 let dispatchEventMock: MockInstance<typeof window.dispatchEvent>
 
+function setCookie(name: string, value: string) {
+  document.cookie = `${name}=${value}; path=/`
+}
+
 beforeEach(() => {
   dispatchEventMock = vi.spyOn(window, 'dispatchEvent').mockImplementation(() => true)
+  for (const part of document.cookie.split(';')) {
+    const key = part.split('=')[0]?.trim()
+    if (key) document.cookie = `${key}=; path=/; Max-Age=0`
+  }
 })
 
 afterEach(() => {
@@ -25,21 +33,56 @@ afterEach(() => {
 })
 
 describe('api client', () => {
-  it('attaches bearer token from localStorage', async () => {
+  it('sends cookies on every request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    await http.get('/api/projects')
+    const [, options] = fetchMock.mock.calls[0]
+    expect(options.credentials).toBe('include')
+  })
+
+  it('never sends an authorization header', async () => {
     localStorage.setItem('menzi_token', 'token-123')
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }))
     vi.stubGlobal('fetch', fetchMock)
     await http.get('/api/projects')
     const [, options] = fetchMock.mock.calls[0]
-    expect(options.headers.get('Authorization')).toBe('Bearer token-123')
+    expect(options.headers.get('Authorization')).toBeNull()
   })
 
-  it('does not send authorization header without a token', async () => {
+  it('attaches the csrf header to a post', async () => {
+    setCookie('menzi_csrf', 'csrf-value')
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, { id: 'p1' }))
+    vi.stubGlobal('fetch', fetchMock)
+    await http.post('/api/projects', { name: 'Demo' })
+    const [, options] = fetchMock.mock.calls[0]
+    expect(options.headers.get('x-menzi-csrf')).toBe('csrf-value')
+  })
+
+  it('attaches the csrf header to a delete', async () => {
+    setCookie('menzi_csrf', 'csrf-value')
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(204, null))
+    vi.stubGlobal('fetch', fetchMock)
+    await http.delete('/api/projects/p1')
+    const [, options] = fetchMock.mock.calls[0]
+    expect(options.headers.get('x-menzi-csrf')).toBe('csrf-value')
+  })
+
+  it('does not attach the csrf header to a get', async () => {
+    setCookie('menzi_csrf', 'csrf-value')
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }))
     vi.stubGlobal('fetch', fetchMock)
     await http.get('/api/projects')
     const [, options] = fetchMock.mock.calls[0]
-    expect(options.headers.get('Authorization')).toBeNull()
+    expect(options.headers.get('x-menzi-csrf')).toBeNull()
+  })
+
+  it('omits the csrf header when no cookie is present', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, { id: 'p1' }))
+    vi.stubGlobal('fetch', fetchMock)
+    await http.post('/api/projects', { name: 'Demo' })
+    const [, options] = fetchMock.mock.calls[0]
+    expect(options.headers.get('x-menzi-csrf')).toBeNull()
   })
 
   it('throws ApiError with parsed message when response is not ok', async () => {
@@ -64,14 +107,13 @@ describe('api client', () => {
     })
   })
 
-  it('clears the token and dispatches the unauthorized event on 401', async () => {
+  it('dispatches the unauthorized event on 401 without touching storage', async () => {
     localStorage.setItem('menzi_token', 'token-123')
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(jsonResponse(401, { error: { message: 'expired' } }, 'Unauthorized')),
     )
     await expect(http.get('/api/demo')).rejects.toBeInstanceOf(ApiError)
-    expect(localStorage.getItem('menzi_token')).toBeNull()
     expect(dispatchEventMock).toHaveBeenCalledWith(expect.objectContaining({ type: UNAUTHORIZED_EVENT }))
   })
 
@@ -94,5 +136,16 @@ describe('api client', () => {
     const [, options] = fetchMock.mock.calls[0]
     expect(options.method).toBe('DELETE')
     expect(options.body).toBeUndefined()
+  })
+})
+
+describe('readCookie', () => {
+  it('reads a value out of the document cookie', () => {
+    setCookie('menzi_csrf', 'abc')
+    expect(readCookie('menzi_csrf')).toBe('abc')
+  })
+
+  it('returns null for a cookie that is not set', () => {
+    expect(readCookie('not-set')).toBeNull()
   })
 })
