@@ -1,4 +1,4 @@
-use menzi_common::ids::{OrgId, ProjectId, SessionId, UserId};
+use menzi_common::ids::{ProjectId, SessionId, UserId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,7 +21,6 @@ pub struct PlacementRequest {
     pub session_id: SessionId,
     pub project_id: ProjectId,
     pub user_id: UserId,
-    pub org_id: OrgId,
     pub template_id: Option<String>,
     pub trust_level: TrustLevel,
 }
@@ -348,11 +347,11 @@ mod tests {
     fn placement_decision_serializes() {
         let decision = PlacementDecision {
             node: "node-1".to_string(),
-            project: "org-acme-ws".to_string(),
+            project: "acme-ws".to_string(),
             network: "sess-123".to_string(),
         };
         let json = serde_json::to_string(&decision).unwrap();
         assert!(json.contains("node-1"));
-        assert!(json.contains("org-acme-ws"));
+        assert!(json.contains("acme-ws"));
     }
 }
