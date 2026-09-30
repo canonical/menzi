@@ -4,7 +4,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use menzi_auth::tenant::{TenantContext, HEADER_PROJECT_ID, HEADER_SESSION_ID};
-use menzi_common::ids::{OrgId, ProjectId, SessionId, UserId};
+use menzi_common::ids::{ProjectId, SessionId, UserId};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
@@ -90,10 +90,10 @@ fn budget_key(headers: &HeaderMap) -> String {
     }
 }
 
-fn tenant_ids(headers: &HeaderMap) -> (Option<OrgId>, Option<ProjectId>, Option<UserId>) {
+fn tenant_ids(headers: &HeaderMap) -> (Option<ProjectId>, Option<UserId>) {
     match TenantContext::from_headers(headers) {
-        Ok(tenant) => (Some(tenant.org_id), tenant.project_id, tenant.user_id),
-        Err(_) => (None, None, None),
+        Ok(tenant) => (tenant.project_id, tenant.user_id),
+        Err(_) => (None, None),
     }
 }
 
@@ -159,9 +159,8 @@ async fn chat_completions(
             budgets.record_spend(&budget_key(&headers), actual_cost);
             drop(budgets);
 
-            let (org_id, project_id, user_id) = tenant_ids(&headers);
+            let (project_id, user_id) = tenant_ids(&headers);
             let record = state.audit.log_request(LogRequestParams {
-                org_id,
                 project_id,
                 user_id,
                 session_id: session_id_from_header(&headers),
@@ -219,7 +218,6 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use menzi_common::ids::OrgId;
     use tower::ServiceExt;
 
     fn budget_manager() -> BudgetManager {
@@ -227,7 +225,6 @@ mod tests {
         manager.set_budget(
             "global".to_string(),
             BudgetStatus {
-                org_id: OrgId::new(),
                 project_id: None,
                 user_id: None,
                 session_id: None,
@@ -375,7 +372,6 @@ mod tests {
             budgets.set_budget(
                 "global".to_string(),
                 BudgetStatus {
-                    org_id: OrgId::new(),
                     project_id: None,
                     user_id: None,
                     session_id: None,
@@ -434,12 +430,11 @@ mod tests {
         assert_eq!(provider_for_model("gpt-4", "local"), "local");
     }
 
-    fn tenant_request(path: &str, org_id: OrgId, project_id: ProjectId) -> Request<Body> {
+    fn tenant_request(path: &str, project_id: ProjectId) -> Request<Body> {
         Request::builder()
             .method("POST")
             .uri(path)
             .header("content-type", "application/json")
-            .header("x-menzi-org-id", org_id.to_string())
             .header("x-menzi-project-id", project_id.to_string())
             .header("x-menzi-user-id", UserId::new().to_string())
             .body(Body::from(
@@ -456,15 +451,13 @@ mod tests {
     #[tokio::test]
     async fn chat_completions_scopes_budget_per_tenant() {
         let (app, state) = gateway().await;
-        let org_a = OrgId::new();
         let project_a = ProjectId::new();
-        let scope_a = format!("{org_a}:{project_a}");
+        let scope_a = format!("project:{project_a}");
         {
             let mut budgets = state.budgets.lock().unwrap();
             budgets.set_budget(
                 scope_a,
                 BudgetStatus {
-                    org_id: org_a,
                     project_id: Some(project_a),
                     user_id: None,
                     session_id: None,
@@ -477,15 +470,14 @@ mod tests {
 
         let response = app
             .clone()
-            .oneshot(tenant_request("/v1/chat/completions", org_a, project_a))
+            .oneshot(tenant_request("/v1/chat/completions", project_a))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let org_b = OrgId::new();
         let project_b = ProjectId::new();
         let response = app
-            .oneshot(tenant_request("/v1/chat/completions", org_b, project_b))
+            .oneshot(tenant_request("/v1/chat/completions", project_b))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -493,9 +485,8 @@ mod tests {
 
     #[tokio::test]
     async fn chat_completions_applies_tenant_policy() {
-        let org_id = OrgId::new();
         let project_id = ProjectId::new();
-        let scope = format!("{org_id}:{project_id}");
+        let scope = format!("project:{project_id}");
         let mut policy = PolicyEngine::new();
         policy.register(
             scope,
@@ -508,7 +499,7 @@ mod tests {
         let (app, _state) = gateway_with_policy(policy).await;
 
         let response = app
-            .oneshot(tenant_request("/v1/chat/completions", org_id, project_id))
+            .oneshot(tenant_request("/v1/chat/completions", project_id))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -517,15 +508,13 @@ mod tests {
     #[tokio::test]
     async fn chat_completions_records_tenant_in_audit() {
         let (app, state) = gateway().await;
-        let org_id = OrgId::new();
         let project_id = ProjectId::new();
         let response = app
-            .oneshot(tenant_request("/v1/chat/completions", org_id, project_id))
+            .oneshot(tenant_request("/v1/chat/completions", project_id))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let record = state.audit.last_record().expect("audit record");
-        assert_eq!(record.org_id, org_id);
         assert_eq!(record.project_id, Some(project_id));
     }
 
@@ -537,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn request_scope_uses_project_header_without_org() {
+    fn request_scope_uses_an_unparsable_project_header() {
         let mut headers = HeaderMap::new();
         headers.insert("x-menzi-project-id", "proj-1".parse().unwrap());
         assert_eq!(request_scope(&headers), "proj-1");
@@ -545,15 +534,13 @@ mod tests {
 
     #[test]
     fn request_scope_uses_tenant_scope_key() {
-        let org_id = OrgId::new();
         let project_id = ProjectId::new();
         let mut headers = HeaderMap::new();
-        headers.insert("x-menzi-org-id", org_id.to_string().parse().unwrap());
         headers.insert(
             "x-menzi-project-id",
             project_id.to_string().parse().unwrap(),
         );
-        assert_eq!(request_scope(&headers), format!("{org_id}:{project_id}"));
-        assert_eq!(budget_key(&headers), format!("{org_id}:{project_id}"));
+        assert_eq!(request_scope(&headers), format!("project:{project_id}"));
+        assert_eq!(budget_key(&headers), format!("project:{project_id}"));
     }
 }
