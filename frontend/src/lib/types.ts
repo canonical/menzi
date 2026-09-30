@@ -189,6 +189,8 @@ export interface TextPart {
 export interface ReasoningPart {
   type: 'reasoning';
   text: string;
+  /** Epoch milliseconds. `end` is missing until the thought finishes. */
+  time?: { start?: number; end?: number };
 }
 
 export interface ToolPart {

@@ -374,6 +374,7 @@ export const S = {
     input: 'Input',
     result: 'Result',
     thinking: 'Thinking',
+    thoughtFor: 'Thought for {duration}',
     showMore: 'Show more',
     showLess: 'Show less',
     noResult: 'No result was returned.',

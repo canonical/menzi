@@ -58,7 +58,7 @@ function MessageParts({ parts }: { parts: MessagePart[] }) {
           );
         }
 
-        if (isReasoningPart(part)) return <ThinkingBlock key={key} text={part.text} />;
+        if (isReasoningPart(part)) return <ThinkingBlock key={key} part={part} />;
         if (isCompactionPart(part)) return <CompactionMarker key={key} part={part} />;
         if (isStepPart(part)) return null;
         return null;

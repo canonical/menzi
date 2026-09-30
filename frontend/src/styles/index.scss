@@ -432,14 +432,6 @@
   flex: 0 0 auto;
 }
 
-.app-thinking__preview {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .app-thinking__body {
   border-left: 2px solid var(--vf-color-border-low-contrast);
   color: var(--vf-color-text-muted);

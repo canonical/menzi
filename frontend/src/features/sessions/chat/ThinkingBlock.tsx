@@ -1,20 +1,28 @@
 import { Icon } from '@canonical/react-components';
-import { oneLine } from '../../../lib/format/text';
-import type { CompactionPart } from '../../../lib/types';
+import { formatDuration } from '../../../lib/format/duration';
+import type { CompactionPart, ReasoningPart } from '../../../lib/types';
 import { S } from '../../../strings/catalogue';
 
-const PREVIEW_LIMIT = 72;
+function durationOf(part: ReasoningPart): string {
+  const start = part.time?.start;
+  const end = part.time?.end;
+  if (typeof start !== 'number' || typeof end !== 'number') return '';
+  return formatDuration(end - start);
+}
 
-export function ThinkingBlock({ text }: { text: string }) {
-  if (!text.trim()) return null;
+export function ThinkingBlock({ part }: { part: ReasoningPart }) {
+  if (!part.text.trim()) return null;
+  const duration = durationOf(part);
+  const label = duration
+    ? S.chatSteps.thoughtFor.replace('{duration}', duration)
+    : S.chatSteps.thinking;
   return (
     <details className="app-thinking">
-      <summary className="app-thinking__summary" title={text.trim()}>
+      <summary className="app-thinking__summary" title={part.text.trim()}>
         <Icon className="app-thinking__chevron" name="chevron-down" />
-        <span className="app-thinking__label">{S.chatSteps.thinking}</span>
-        <span className="app-thinking__preview">{oneLine(text, PREVIEW_LIMIT)}</span>
+        <span className="app-thinking__label">{label}</span>
       </summary>
-      <p className="app-thinking__body">{text}</p>
+      <p className="app-thinking__body">{part.text}</p>
     </details>
   );
 }

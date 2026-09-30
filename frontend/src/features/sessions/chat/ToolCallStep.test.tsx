@@ -7,7 +7,7 @@ import { groupableRuns } from '../../../lib/chat/groupRuns';
 import { ToolCallGroup } from './ToolCallGroup';
 import { ThinkingBlock, CompactionMarker } from './ThinkingBlock';
 import { axeOptions } from '../../../testing/axe';
-import type { ToolPart } from '../../../lib/types';
+import type { ReasoningPart, ToolPart } from '../../../lib/types';
 
 const running: ToolPart = {
   type: 'tool',
@@ -159,7 +159,9 @@ describe('ToolCallStep', () => {
         <ToolCallStep part={running} />
         <ToolCallStep part={completed} />
         <ToolCallStep part={failed} />
-        <ThinkingBlock text="considering options" />
+        <ThinkingBlock
+          part={{ type: 'reasoning', text: 'considering options', time: { start: 0, end: 1_000 } }}
+        />
       </div>,
     );
     expect(await axe(container, axeOptions)).toHaveNoViolations();
@@ -211,29 +213,66 @@ describe('ToolCallGroup', () => {
 
 describe('ThinkingBlock', () => {
   it('folds reasoning away by default', () => {
-    render(<ThinkingBlock text="internal reasoning" />);
+    render(<ThinkingBlock part={{ type: 'reasoning', text: 'internal reasoning' }} />);
     const details = screen.getByText('Thinking').closest('details');
     expect(details?.hasAttribute('open')).toBe(false);
   });
 
-  it('previews the reasoning on the folded line', () => {
-    const text = 'I should check the routes first\nand then the guard.';
-    render(<ThinkingBlock text={text} />);
-    expect(textOf('.app-thinking__preview')).toBe(
-      'I should check the routes first and then the guard.',
+  it('reports how long the thought took instead of quoting it', () => {
+    render(
+      <ThinkingBlock
+        part={{
+          type: 'reasoning',
+          text: 'I should check the routes first.',
+          time: { start: 1_000, end: 6_400 },
+        }}
+      />,
     );
-    expect(document.querySelector('.app-thinking__summary')?.getAttribute('title')).toBe(text);
+    expect(textOf('.app-thinking__label')).toBe('Thought for 5s');
+    expect(textOf('.app-thinking__body')).toBe('I should check the routes first.');
   });
 
-  it('clips a long preview and keeps the whole thing in the tooltip', () => {
-    const text = 'x'.repeat(200);
-    render(<ThinkingBlock text={text} />);
-    expect(textOf('.app-thinking__preview')).toHaveLength(75);
+  it('keeps a decimal for a thought under a second', () => {
+    render(
+      <ThinkingBlock
+        part={{ type: 'reasoning', text: 'quick', time: { start: 0, end: 189 } }}
+      />,
+    );
+    expect(screen.getByText('Thought for 0.2s')).toBeInTheDocument();
+  });
+
+  it('still says it is thinking while the thought is unfinished', () => {
+    render(
+      <ThinkingBlock
+        part={{ type: 'reasoning', text: 'half a thought', time: { start: 1_000 } }}
+      />,
+    );
+    expect(screen.getByText('Thinking')).toBeInTheDocument();
+  });
+
+  it('falls back to thinking when the server sent no timing', () => {
+    render(<ThinkingBlock part={{ type: 'reasoning', text: 'no timing here' }} />);
+    expect(screen.getByText('Thinking')).toBeInTheDocument();
+  });
+
+  it('ignores a timing the server sent in the wrong shape', () => {
+    const part = {
+      type: 'reasoning',
+      text: 'odd timing',
+      time: { start: 0, end: '5000' },
+    } as unknown as ReasoningPart;
+    render(<ThinkingBlock part={part} />);
+    expect(screen.getByText('Thinking')).toBeInTheDocument();
+  });
+
+  it('keeps the whole thought in the tooltip', () => {
+    const text = 'I should check the routes first\nand then the guard.';
+    render(<ThinkingBlock part={{ type: 'reasoning', text, time: { start: 0, end: 2_000 } }} />);
     expect(document.querySelector('.app-thinking__summary')?.getAttribute('title')).toBe(text);
   });
 
   it('renders nothing for empty reasoning', () => {
-    const { container } = render(<ThinkingBlock text="   " />);
+    const { container } = render(<ThinkingBlock part={{ type: 'reasoning', text: '   ' }} />);
     expect(container).toBeEmptyDOMElement();
   });
 });
