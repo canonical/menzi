@@ -14,6 +14,7 @@ use tokio::sync::{broadcast, RwLock};
 
 use crate::config::ProxyConfig;
 use crate::fanout::FanoutManager;
+use crate::router::{endpoint_override, session_from_path, InMemorySessionRouter, SessionRouter};
 use crate::transcript::TranscriptArchiver;
 use crate::tunnel::{MessageType, TunnelConnection, TunnelManager, TunnelMessage};
 
@@ -27,6 +28,7 @@ pub struct ProxyState {
     pub fanout: Arc<Mutex<FanoutManager>>,
     pub sequence: Arc<AtomicI64>,
     pub events: broadcast::Sender<TunnelMessage>,
+    pub router: Arc<dyn SessionRouter>,
 }
 
 impl ProxyState {
@@ -43,7 +45,34 @@ impl ProxyState {
             fanout: Arc::new(Mutex::new(FanoutManager::new())),
             sequence: Arc::new(AtomicI64::new(0)),
             events,
+            router: Arc::new(InMemorySessionRouter::new()),
         }
+    }
+
+    pub fn with_router(mut self, router: Arc<dyn SessionRouter>) -> Self {
+        self.router = router;
+        self
+    }
+
+    pub async fn target_for(&self, headers: &HeaderMap, path: &str) -> String {
+        if let Some(endpoint) = endpoint_override(headers) {
+            return endpoint;
+        }
+        if let Some(session) = session_from_path(path) {
+            if let Some(endpoint) = self.target_for_session(session).await {
+                return endpoint;
+            }
+        }
+        self.opencode_url.read().await.clone()
+    }
+
+    /// The opencode serving a session, or the single registered target when the
+    /// session is not bound to a workspace.
+    pub async fn target_for_session(&self, session: &str) -> Option<String> {
+        if session.is_empty() {
+            return None;
+        }
+        self.router.endpoint_for(session).await
     }
 }
 
@@ -51,6 +80,7 @@ pub fn create_router(state: ProxyState) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/api/opencode/register", post(register_opencode))
+        .route("/api/opencode/bind", post(bind_session))
         .route("/api/tunnel/register", post(register_tunnel))
         .route("/api/tunnel/sessions", get(list_sessions))
         .route("/api/oc/event", get(stream_upstream_event))
@@ -100,6 +130,35 @@ async fn register_opencode(
     (
         StatusCode::OK,
         Json(json!({"status": "registered", "url": url})),
+    )
+        .into_response()
+}
+
+async fn bind_session(
+    State(state): State<ProxyState>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let (Some(session), Some(endpoint)) = (
+        body.get("session").and_then(|value| value.as_str()),
+        body.get("endpoint").and_then(|value| value.as_str()),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "session and endpoint are required"})),
+        )
+            .into_response();
+    };
+    if session.is_empty() || endpoint.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "session and endpoint are required"})),
+        )
+            .into_response();
+    }
+    state.router.bind(session, endpoint);
+    (
+        StatusCode::OK,
+        Json(json!({"status": "bound", "session": session, "endpoint": endpoint})),
     )
         .into_response()
 }
@@ -280,10 +339,26 @@ pub fn upstream_credentials() -> Option<(String, String)> {
     Some((username, password))
 }
 
+#[derive(serde::Deserialize)]
+struct EventStreamQuery {
+    session: Option<String>,
+}
+
 async fn stream_upstream_event(
     State(state): State<ProxyState>,
+    headers: HeaderMap,
+    Query(query): Query<EventStreamQuery>,
 ) -> Response {
-    let target = state.opencode_url.read().await.clone();
+    let target = match endpoint_override(&headers) {
+        Some(endpoint) => endpoint,
+        None => match state
+            .target_for_session(query.session.as_deref().unwrap_or_default())
+            .await
+        {
+            Some(endpoint) => endpoint,
+            None => state.opencode_url.read().await.clone(),
+        },
+    };
     let url = format!("{target}/api/event");
 
     let upstream = match state.http.get(&url).send().await {
@@ -299,7 +374,11 @@ async fn stream_upstream_event(
 
     if upstream.status() != StatusCode::OK {
         let status = upstream.status();
-        return (status, Json(json!({"error": "upstream event stream unavailable"}))).into_response();
+        return (
+            status,
+            Json(json!({"error": "upstream event stream unavailable"})),
+        )
+            .into_response();
     }
 
     let stream = upstream
@@ -333,11 +412,11 @@ async fn forward(
             .into_response();
     }
 
-    let target = state.opencode_url.read().await.clone();
     let path_and_query = uri
         .path_and_query()
         .map(|value| value.as_str())
         .unwrap_or(uri.path());
+    let target = state.target_for(&headers, uri.path()).await;
     let url = format!("{target}{path_and_query}");
 
     let mut builder = state.http.request(method, url);
@@ -420,10 +499,11 @@ fn record_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::router::HEADER_WORKSPACE_ENDPOINT;
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::get;
-    
+
     use std::time::Duration;
     use tower::ServiceExt;
 
@@ -552,6 +632,281 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
+    async fn start_named_opencode(name: &'static str) -> String {
+        let app = Router::new().route(
+            "/api/session/{id}/log",
+            get(move || {
+                let name = name.to_string();
+                async move { Json(json!({"lines": [name]})) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn an_unbound_session_falls_back_to_the_default_target() {
+        let target = start_named_opencode("default").await;
+        let state = ProxyState::new(ProxyConfig::default_allowlist(), target);
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/session/unknown/log")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(body_string(response).await.contains("default"));
+    }
+
+    #[tokio::test]
+    async fn a_bound_session_goes_to_its_own_opencode() {
+        let default_target = start_named_opencode("default").await;
+        let workspace_target = start_named_opencode("workspace").await;
+        let router = Arc::new(InMemorySessionRouter::new());
+        router.set("ses_a", workspace_target.clone());
+        let state = ProxyState::new(ProxyConfig::default_allowlist(), default_target)
+            .with_router(router.clone());
+        let app = create_router(state);
+
+        let bound = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/session/ses_a/log")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(body_string(bound).await.contains("workspace"));
+
+        let unbound = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/session/ses_b/log")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(body_string(unbound).await.contains("default"));
+    }
+
+    #[tokio::test]
+    async fn a_header_override_wins_over_the_binding() {
+        let default_target = start_named_opencode("default").await;
+        let override_target = start_named_opencode("override").await;
+        let router = Arc::new(InMemorySessionRouter::new());
+        router.set("ses_a", default_target);
+        let state = ProxyState::new(ProxyConfig::default_allowlist(), "http://127.0.0.1:1")
+            .with_router(router);
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/session/ses_a/log")
+                    .header(HEADER_WORKSPACE_ENDPOINT, override_target)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(body_string(response).await.contains("override"));
+    }
+
+    #[tokio::test]
+    async fn binding_a_session_over_http_routes_the_next_request() {
+        let default_target = start_named_opencode("default").await;
+        let workspace_target = start_named_opencode("bound").await;
+        let state = ProxyState::new(ProxyConfig::default_allowlist(), default_target);
+        let app = create_router(state);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/opencode/bind")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "session": "ses_c",
+                            "endpoint": workspace_target,
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/session/ses_c/log")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(body_string(response).await.contains("bound"));
+    }
+
+    #[tokio::test]
+    async fn binding_needs_both_fields() {
+        let state = test_state();
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/opencode/bind")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({"session": "ses_d"})).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    async fn start_event_source(name: &'static str) -> String {
+        let app = Router::new()
+            .route(
+                "/api/event",
+                get(move || {
+                    let name = name.to_string();
+                    async move {
+                        let payload = format!("data: {{\"name\":\"{name}\"}}\n\n");
+                        let stream = futures_util::stream::once(async move {
+                            Ok::<_, std::io::Error>(axum::body::Bytes::from(payload))
+                        });
+                        let mut response = Response::new(axum::body::Body::from_stream(stream));
+                        *response.status_mut() = StatusCode::OK;
+                        response.headers_mut().insert(
+                            header::CONTENT_TYPE,
+                            HeaderValue::from_static("text/event-stream"),
+                        );
+                        response
+                    }
+                }),
+            )
+            .route("/session/{id}/message", get(|| async { Json(json!([])) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn the_event_stream_falls_back_to_the_default_target() {
+        let target = start_event_source("default").await;
+        let state = ProxyState::new(ProxyConfig::default_allowlist(), target);
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/oc/event")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response).await;
+        assert!(body.contains("default"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn the_event_stream_routes_to_a_bound_session_opencode() {
+        let default_target = start_event_source("default").await;
+        let workspace_target = start_event_source("workspace").await;
+        let router = Arc::new(InMemorySessionRouter::new());
+        router.set("ses_s", workspace_target);
+        let state =
+            ProxyState::new(ProxyConfig::default_allowlist(), default_target).with_router(router);
+        let app = create_router(state);
+
+        let bound = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/oc/event?session=ses_s")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(body_string(bound).await.contains("workspace"));
+
+        let unbound = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/oc/event?session=ses_other")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(body_string(unbound).await.contains("default"));
+    }
+
+    #[tokio::test]
+    async fn the_event_stream_routes_from_the_workspace_header() {
+        let default_target = start_event_source("default").await;
+        let override_target = start_event_source("override").await;
+        let state = ProxyState::new(ProxyConfig::default_allowlist(), default_target);
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/oc/event")
+                    .header(HEADER_WORKSPACE_ENDPOINT, override_target)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(body_string(response).await.contains("override"));
+    }
+
+    #[tokio::test]
+    async fn the_sdk_path_routes_by_session_too() {
+        let default_target = start_fake_opencode().await;
+        let router = Arc::new(InMemorySessionRouter::new());
+        router.set("ses_e", "http://127.0.0.1:1");
+        let state =
+            ProxyState::new(ProxyConfig::default_allowlist(), default_target).with_router(router);
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/session/ses_e/message")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
     #[tokio::test]
     async fn forward_rejects_unknown_route() {
         let state = test_state();
@@ -674,12 +1029,7 @@ mod tests {
 
     fn seed_events(state: &ProxyState, session_id: SessionId, count: usize) {
         for index in 0..count {
-            record_event(
-                state,
-                session_id,
-                MessageType::Event,
-                json!({"n": index}),
-            );
+            record_event(state, session_id, MessageType::Event, json!({"n": index}));
         }
     }
 
@@ -787,9 +1137,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(format!(
-                        "/api/tunnel/{session_id}/transcript?follow=true"
-                    ))
+                    .uri(format!("/api/tunnel/{session_id}/transcript?follow=true"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -923,7 +1271,10 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_string(response).await;
-        assert!(body.contains("Basic cHJveHktdXNlcjpwcm94eS1wYXNz"), "{body}");
+        assert!(
+            body.contains("Basic cHJveHktdXNlcjpwcm94eS1wYXNz"),
+            "{body}"
+        );
 
         unsafe {
             std::env::remove_var("MENZI_OPENCODE_USERNAME");

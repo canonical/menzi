@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -13,7 +14,9 @@ async fn main() {
     let state = menzi_session_proxy::ProxyState::new(
         menzi_session_proxy::ProxyConfig::default_allowlist(),
         opencode_url,
-    );
+    )
+    .with_router(Arc::new(menzi_session_proxy::WorkspaceRouter::from_env()));
+
     let app = menzi_session_proxy::create_router(state);
 
     info!("Listening on {}", config.gateway_bind);
