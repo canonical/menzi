@@ -173,7 +173,7 @@ describe('Layout', () => {
     expect(screen.queryByTestId('app-drawer')).not.toBeInTheDocument();
   });
 
-  it('remembers the collapsed navigation across a remount', async () => {
+  it('starts with the navigation open again after a remount', async () => {
     const user = userEvent.setup();
     const { unmount } = renderLayout();
 
@@ -181,6 +181,17 @@ describe('Layout', () => {
     unmount();
     const { container } = renderLayout();
 
-    expect(container.querySelector('.app-collapsed-bar')).toBeInTheDocument();
+    expect(container.querySelector('.app-collapsed-bar')).toBeNull();
+    expect(container.querySelector('.l-navigation')).toBeInTheDocument();
+  });
+
+  it('keeps nothing about the collapse in storage', async () => {
+    const user = userEvent.setup();
+    renderLayout();
+
+    await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
+
+    const stored = Object.keys(localStorage).filter((key) => key.includes('nav'));
+    expect(stored).toEqual([]);
   });
 });
