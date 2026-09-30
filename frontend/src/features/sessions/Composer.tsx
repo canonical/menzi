@@ -1,6 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Form, Icon, Spinner, Textarea, useNotify } from '@canonical/react-components';
+import { Button, Form, Icon, Input, Spinner, useNotify } from '@canonical/react-components';
 import { listAgents, listModels, sendPrompt } from '../../lib/api/opencode';
 import { getErrorMessage } from '../../lib/api/errors';
 import { queryKeys } from '../../lib/routes';
@@ -35,8 +35,9 @@ export function Composer({ sessionId, disabled }: ComposerProps) {
     onSuccess: () => {
       setText('');
       queryClient.invalidateQueries({ queryKey: queryKeys.opencode.messages(sessionId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.opencode.diff(sessionId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.opencode.vcs() });
+      // The review list comes from the message summaries and each patch is
+      // cached per message, so clear every diff entry for this session.
+      queryClient.invalidateQueries({ queryKey: queryKeys.opencode.diffs(sessionId) });
     },
     onError: (error) => notify.failure(S.chat.sendFailed, error, getErrorMessage(error)),
   });
@@ -51,40 +52,38 @@ export function Composer({ sessionId, disabled }: ComposerProps) {
     modelId || (models.length === 1 ? `${models[0].providerID ?? ''}/${models[0].id}` : '');
 
   return (
-    <Form className="u-margin--bottom" onSubmit={handleSubmit}>
-      <Textarea
-        id="chat-composer"
-        label={S.chat.label}
-        placeholder={S.chat.placeholder}
-        rows={3}
-        disabled={disabled}
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-      />
-      <div className="u-flex u-align--center u-justify--end">
-        {models.length > 0 ? (
-          <span className="u-off-left--small" data-testid="chat-model">
-            {modelValue}
-          </span>
-        ) : null}
-        {agents.length > 0 ? (
-          <span className="u-off-left--small" data-testid="chat-agent">
-            {agent || agents[0].id}
-          </span>
-        ) : null}
+    <Form className="app-composer" onSubmit={handleSubmit}>
+      {models.length > 0 ? (
+        <span className="u-off-screen" data-testid="chat-model">
+          {modelValue}
+        </span>
+      ) : null}
+      {agents.length > 0 ? (
+        <span className="u-off-screen" data-testid="chat-agent">
+          {agent || agents[0].id}
+        </span>
+      ) : null}
+      <div className="app-composer__row">
+        <Input
+          id="chat-composer"
+          className="app-composer__input"
+          wrapperClassName="app-composer__field"
+          type="text"
+          label={S.chat.label}
+          labelClassName="u-off-screen"
+          placeholder={S.chat.placeholder}
+          disabled={disabled}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
         <Button
           appearance="positive"
+          aria-label={promptMutation.isPending ? S.chat.sending : S.chat.send}
+          className="app-composer__send"
           type="submit"
           disabled={disabled || !text.trim() || promptMutation.isPending}
         >
-          {promptMutation.isPending ? (
-            <Spinner text={S.chat.sending} />
-          ) : (
-            <>
-              <Icon name="send" />
-              {S.chat.send}
-            </>
-          )}
+          {promptMutation.isPending ? <Spinner /> : <Icon name="arrow-right" />}
         </Button>
       </div>
     </Form>

@@ -69,7 +69,7 @@ export function SessionPage() {
       items: [
         { icon: 'code', label: S.nav.projects, to: '/projects' },
         {
-          icon: 'comment',
+          icon: 'quote',
           label: sessionKnown ? S.session.title : S.session.threads.emptyTitle,
           to: '',
         },
@@ -134,13 +134,15 @@ export function SessionPage() {
           </div>
         }
       >
-        {sessionKnown && sessionId ? (
-          <TranscriptView sessionId={sessionId} />
-        ) : (
-          <EmptyState title={S.session.conversation.emptyTitle} image={<Icon name="comment" />}>
-            <p>{S.session.conversation.emptyBody}</p>
-          </EmptyState>
-        )}
+        <div className="app-content">
+          {sessionKnown && sessionId ? (
+            <TranscriptView sessionId={sessionId} />
+          ) : (
+            <EmptyState title={S.session.conversation.emptyTitle} image={<Icon name="quote" />}>
+              <p>{S.session.conversation.emptyBody}</p>
+            </EmptyState>
+          )}
+        </div>
         <NotificationConsumer />
       </ApplicationLayout>
     </>

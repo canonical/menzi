@@ -2,14 +2,18 @@ import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { Button, EmptyState, Icon, Tabs, useNotify } from '@canonical/react-components';
-import { createSession, listSessions } from '../../lib/api/opencode';
 import { getErrorMessage } from '../../lib/api/errors';
+import { openWorkspaceSession, listWorkspaceSessions } from '../../lib/api/workspaces';
 import { queryKeys } from '../../lib/routes';
 import { formatDateTime } from '../../lib/format/time';
+import { useAuthStore } from '../../stores/auth';
 import { ChatPanel } from './ChatPanel';
 import { CodeReviewPanel } from './CodeReviewPanel';
 import { Composer } from './Composer';
 import { Unavailable } from '../../components/Unavailable';
+import { WorkspaceStatus } from '../workspaces/WorkspaceStatus';
+import { blockReason } from '../workspaces/reasons';
+import { useWorkspace } from '../workspaces/useWorkspace';
 import { S } from '../../strings/catalogue';
 
 const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9]+$/;
@@ -18,12 +22,16 @@ function shortId(sessionId: string): string {
   return sessionId.replace(/^ses_/, '').slice(0, 8);
 }
 
-function labelFor(session: { id: string; time?: { created?: number; updated?: number } }): string {
-  const time = session.time?.updated ?? session.time?.created;
-  if (typeof time === 'number') {
-    return `${shortId(session.id)} · ${formatDateTime(new Date(time).toISOString())}`;
-  }
+function labelFor(session: { id: string; title?: string | null }): string {
+  const title = session.title?.trim();
+  if (title) return title;
   return shortId(session.id);
+}
+
+function timestampFor(session: { time?: { created?: number; updated?: number } }): string {
+  const time = session.time?.updated ?? session.time?.created;
+  if (typeof time !== 'number') return '';
+  return ` · ${formatDateTime(new Date(time).toISOString())}`;
 }
 
 export function CodePage() {
@@ -31,11 +39,19 @@ export function CodePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const notify = useNotify();
+  const user = useAuthStore((state) => state.user);
+  const userId = user?.id;
 
+  const workspaceState = useWorkspace(projectId, userId);
+  const blocked = workspaceState.canStartSession ? null : blockReason(workspaceState.reason);
+
+  const sessionsKey = queryKeys.opencode.workspaceSessions(userId ?? '', projectId ?? '');
   const sessionsQuery = useQuery({
-    queryKey: queryKeys.opencode.sessions(),
-    queryFn: listSessions,
+    queryKey: sessionsKey,
+    queryFn: () => listWorkspaceSessions(userId as string, projectId as string),
+    enabled: !!projectId && !!userId && workspaceState.canStartSession,
     retry: false,
+    refetchInterval: workspaceState.sessionsPollMs,
   });
 
   const requested = searchParams.get('session') ?? '';
@@ -51,10 +67,13 @@ export function CodePage() {
   );
 
   const startSession = useCallback(async () => {
-    const session = await createSession();
-    queryClient.invalidateQueries({ queryKey: queryKeys.opencode.sessions() });
+    const session = await openWorkspaceSession(
+      userId as string,
+      projectId as string,
+    );
+    queryClient.invalidateQueries({ queryKey: sessionsKey });
     openSession(session.id);
-  }, [queryClient, openSession]);
+  }, [projectId, userId, queryClient, openSession, sessionsKey]);
 
   const startPending = useMutation({
     mutationFn: startSession,
@@ -68,7 +87,7 @@ export function CodePage() {
   const tabs = [
     ...sessions.map((session) => ({
       id: session.id,
-      label: labelFor(session),
+      label: `${labelFor(session)}${timestampFor(session)}`,
       onClick: () => openSession(session.id),
       active: session.id === active,
     })),
@@ -77,13 +96,15 @@ export function CodePage() {
       : []),
   ];
 
+  const canStart = workspaceState.canStartSession && !startPending.isPending;
+
   return (
-    <div>
-      <div className="u-flex u-justify-space-between u-align--center">
+    <div className="app-code">
+      <div className="app-page-header">
         <h2 className="p-heading--3">{S.sections.code}</h2>
         <Button
           appearance="positive"
-          disabled={startPending.isPending}
+          disabled={!canStart}
           onClick={() => startPending.mutate()}
         >
           <Icon name="plus" />
@@ -91,29 +112,37 @@ export function CodePage() {
         </Button>
       </div>
 
+      <WorkspaceStatus state={workspaceState} onRetry={workspaceState.retry} />
+
+      {blocked ? (
+        <p className="u-text--muted" data-testid="session-blocked-reason">
+          {blocked}
+        </p>
+      ) : null}
+
       {sessionsQuery.error ? (
         <p data-testid="sessions-error">{S.code.sessionsUnavailable}</p>
       ) : null}
 
       {tabs.length === 0 ? (
-        <EmptyState title={S.code.emptyTitle} image={<Icon name="comment" />}>
-          <p>{S.code.emptyBody}</p>
+        <EmptyState title={S.code.emptyTitle} image={<Icon name="quote" />}>
+          <p>{S.workspace.sessions.emptyBody}</p>
         </EmptyState>
       ) : (
         <>
           <Tabs links={tabs} />
           {active ? (
             <div className="app-split">
-              <div>
+              <div className="app-code__chat">
                 <ChatPanel sessionId={active} />
                 <Composer sessionId={active} />
               </div>
-              <div>
+              <div className="app-code__review">
                 <CodeReviewPanel sessionId={active} />
               </div>
             </div>
           ) : (
-            <EmptyState title={S.code.pickTitle} image={<Icon name="comment" />}>
+            <EmptyState title={S.code.pickTitle} image={<Icon name="quote" />}>
               <p>{S.code.pickBody}</p>
             </EmptyState>
           )}
