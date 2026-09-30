@@ -548,7 +548,6 @@ impl AuthService {
             email: Some(user.email),
             name: Some(user.name),
             avatar_url: user.avatar_url,
-            org_id: user.org_id.map(|org| org.to_string()),
             role: self.role_of(user.id).await,
             has_password: user.password_hash.is_some(),
         })
