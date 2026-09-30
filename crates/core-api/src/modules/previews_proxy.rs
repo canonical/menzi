@@ -6,6 +6,8 @@ use axum::Json;
 use serde_json::json;
 use std::sync::Arc;
 
+use crate::identity::IDENTITY_HEADERS;
+
 #[derive(Clone)]
 pub struct PreviewProxy {
     base_url: String,
@@ -48,6 +50,7 @@ pub async fn forward_previews(
     headers: HeaderMap,
     uri: Uri,
     Extension(proxy): Extension<Arc<PreviewProxy>>,
+    Extension(caller): Extension<crate::identity::Caller>,
     body: Body,
 ) -> Response {
     let path = uri
@@ -67,13 +70,14 @@ pub async fn forward_previews(
     };
     let mut forwarded = proxy.client.request(method, &target);
     for (name, value) in headers.iter() {
-        if is_hop_by_hop(name.as_str()) {
+        if is_hop_by_hop(name.as_str()) || IDENTITY_HEADERS.contains(&name.as_str()) {
             continue;
         }
         if let Ok(value) = value.to_str() {
             forwarded = forwarded.header(name, value);
         }
     }
+    forwarded = forwarded.header(caller.header_name(), caller.header_value());
     if !bytes.is_empty() {
         forwarded = forwarded.body(bytes.to_vec());
     }

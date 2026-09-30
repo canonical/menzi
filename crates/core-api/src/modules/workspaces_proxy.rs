@@ -6,13 +6,12 @@ use axum::Json;
 use serde_json::json;
 use std::sync::Arc;
 
-use crate::identity::{resolver_from_env, Caller, CallerResolver, IdentityError, IDENTITY_HEADERS};
+use crate::identity::{Caller, IDENTITY_HEADERS};
 
 #[derive(Clone)]
 pub struct WorkspaceProxy {
     base_url: String,
     client: reqwest::Client,
-    resolver: Arc<dyn CallerResolver>,
 }
 
 impl WorkspaceProxy {
@@ -20,42 +19,13 @@ impl WorkspaceProxy {
         Self {
             base_url: base_url.into(),
             client: reqwest::Client::new(),
-            resolver: resolver_from_env(
-                sqlx::postgres::PgPoolOptions::new()
-                    .max_connections(2)
-                    .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
-                    .expect("lazy pool"),
-            ),
         }
-    }
-
-    pub fn with_resolver(mut self, resolver: Arc<dyn CallerResolver>) -> Self {
-        self.resolver = resolver;
-        self
-    }
-
-    /// The one resolver the process uses, so every surface that asks "who is
-    /// calling" answers from the same source.
-    pub fn caller_resolver(&self) -> Arc<dyn CallerResolver> {
-        self.resolver.clone()
     }
 
     pub fn from_env() -> Self {
         let base_url = std::env::var("MENZI_WORKSPACE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8096".to_string());
-        let pool = std::env::var("MENZI_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://unused:unused@127.0.0.1:1/unused".to_string());
-        let resolver = resolver_from_env(
-            sqlx::postgres::PgPoolOptions::new()
-                .max_connections(4)
-                .connect_lazy(&pool)
-                .expect("lazy pool"),
-        );
-        Self {
-            base_url,
-            client: reqwest::Client::new(),
-            resolver,
-        }
+        Self::new(base_url)
     }
 }
 
@@ -75,30 +45,14 @@ fn is_hop_by_hop(name: &str) -> bool {
     HOP_BY_HOP.contains(&name)
 }
 
-fn identity_status(error: IdentityError) -> StatusCode {
-    match error {
-        IdentityError::Missing => StatusCode::UNAUTHORIZED,
-        IdentityError::Invalid => StatusCode::FORBIDDEN,
-    }
-}
-
 pub async fn forward_workspaces(
     method: Method,
     headers: HeaderMap,
     uri: Uri,
     Extension(proxy): Extension<Arc<WorkspaceProxy>>,
+    Extension(caller): Extension<Caller>,
     body: Body,
 ) -> Response {
-    let caller = match proxy.resolver.resolve(&headers).await {
-        Ok(caller) => caller,
-        Err(error) => {
-            return (
-                identity_status(error),
-                Json(json!({ "error": "who is calling is not established" })),
-            )
-                .into_response();
-        }
-    };
     forward_with_caller(&proxy, caller, method, headers, uri, body).await
 }
 
@@ -155,9 +109,10 @@ async fn forward_with_caller(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::DevCallerResolver;
+    use crate::identity::{CallerResolver, DevCallerResolver, IdentityError};
     use axum::routing::{get, post};
     use axum::Router;
+    use menzi_auth::store::{AccountStore, SessionStore};
     use tokio::net::TcpListener;
     use tower::ServiceExt;
 
@@ -206,13 +161,15 @@ mod tests {
         format!("http://{}", address)
     }
 
-    async fn core_router(proxy: Arc<WorkspaceProxy>) -> Router {
-        let auth = std::sync::Arc::new(crate::auth::AuthState::for_tests_with(
-            proxy.caller_resolver(),
-        ));
+    async fn core_router(resolver: Arc<dyn CallerResolver>, proxy: Arc<WorkspaceProxy>) -> Router {
+        let auth = std::sync::Arc::new(crate::auth::AuthState::for_tests_with(resolver));
         crate::create_router(auth)
             .layer(Extension(proxy))
             .with_state(lazy_pool())
+    }
+
+    fn dev() -> Arc<dyn CallerResolver> {
+        Arc::new(DevCallerResolver::new("dev-user"))
     }
 
     async fn json_of(response: Response) -> serde_json::Value {
@@ -225,10 +182,7 @@ mod tests {
     #[tokio::test]
     async fn forwards_list_to_workspace_service() {
         let base = spawn_fake_workspaces().await;
-        let app = core_router(Arc::new(
-            WorkspaceProxy::new(base).with_resolver(Arc::new(DevCallerResolver::new("dev-user"))),
-        ))
-        .await;
+        let app = core_router(dev(), Arc::new(WorkspaceProxy::new(base))).await;
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -246,10 +200,7 @@ mod tests {
     #[tokio::test]
     async fn forwards_ensure_with_its_body() {
         let base = spawn_fake_workspaces().await;
-        let app = core_router(Arc::new(
-            WorkspaceProxy::new(base).with_resolver(Arc::new(DevCallerResolver::new("dev-user"))),
-        ))
-        .await;
+        let app = core_router(dev(), Arc::new(WorkspaceProxy::new(base))).await;
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -290,10 +241,10 @@ mod tests {
             axum::serve(listener, nested).await.unwrap();
         });
 
-        let app = core_router(Arc::new(
-            WorkspaceProxy::new(format!("http://{address}"))
-                .with_resolver(Arc::new(DevCallerResolver::new("dev-user"))),
-        ))
+        let app = core_router(
+            dev(),
+            Arc::new(WorkspaceProxy::new(format!("http://{address}"))),
+        )
         .await;
         let response = app
             .oneshot(
@@ -313,10 +264,7 @@ mod tests {
     #[tokio::test]
     async fn forwards_a_workspace_sub_route() {
         let base = spawn_fake_workspaces().await;
-        let app = core_router(Arc::new(
-            WorkspaceProxy::new(base).with_resolver(Arc::new(DevCallerResolver::new("dev-user"))),
-        ))
-        .await;
+        let app = core_router(dev(), Arc::new(WorkspaceProxy::new(base))).await;
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -331,11 +279,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_gateway_error_when_the_service_is_down() {
-        let app = core_router(Arc::new(
-            WorkspaceProxy::new("http://127.0.0.1:1")
-                .with_resolver(Arc::new(DevCallerResolver::new("dev-user"))),
-        ))
-        .await;
+        let app = core_router(dev(), Arc::new(WorkspaceProxy::new("http://127.0.0.1:1"))).await;
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -351,10 +295,7 @@ mod tests {
     #[tokio::test]
     async fn a_request_with_no_identity_is_refused_before_forwarding() {
         let base = spawn_fake_workspaces().await;
-        let app = core_router(Arc::new(
-            WorkspaceProxy::new(base).with_resolver(Arc::new(EchoIdentity)),
-        ))
-        .await;
+        let app = core_router(Arc::new(EchoIdentity), Arc::new(WorkspaceProxy::new(base))).await;
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -368,12 +309,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_cookie_signed_caller_reaches_the_workspace_service() {
+        let seen = Arc::new(std::sync::Mutex::new(String::new()));
+        let recorder = seen.clone();
+        let fake = Router::new().route(
+            "/api/v1/projects/{project_id}/workspaces",
+            get(move |headers: HeaderMap| {
+                let recorder = recorder.clone();
+                async move {
+                    let user = headers
+                        .get("x-menzi-user-id")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string();
+                    *recorder.lock().unwrap() = user;
+                    Json(json!([{"instance_name": "wsp-a-b", "status": "ready"}]))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, fake).await.unwrap();
+        });
+
+        let accounts = Arc::new(menzi_auth::store::InMemoryAccountStore::new());
+        let sessions = Arc::new(menzi_auth::store::InMemorySessionStore::new());
+        let user = accounts
+            .create("a@b", "A Person", Some("hash"), true)
+            .await
+            .unwrap();
+        let secret = menzi_auth::secret::SessionSecret::mint().unwrap();
+        sessions
+            .create(menzi_auth::record::NewSession {
+                user_id: user.id,
+                token_hash: secret.digest(),
+                csrf_hash: "c".to_string(),
+                provider_id: "password".to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+                user_agent: None,
+                ip: None,
+            })
+            .await
+            .unwrap();
+        let config = Arc::new(crate::auth::AuthConfig::for_tests());
+        let resolver: Arc<dyn CallerResolver> = Arc::new(
+            crate::auth::identity::SessionResolver::new(sessions, accounts, config),
+        );
+
+        let app = core_router(
+            resolver,
+            Arc::new(WorkspaceProxy::new(format!("http://{address}"))),
+        )
+        .await;
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/projects/p1/workspaces")
+                    .header("cookie", format!("menzi_session={}", secret.expose()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(seen.lock().unwrap().clone(), user.id.to_string());
+    }
+
+    #[tokio::test]
     async fn a_bad_token_is_forbidden() {
         let base = spawn_fake_workspaces().await;
-        let app = core_router(Arc::new(
-            WorkspaceProxy::new(base).with_resolver(Arc::new(EchoIdentity)),
-        ))
-        .await;
+        let app = core_router(Arc::new(EchoIdentity), Arc::new(WorkspaceProxy::new(base))).await;
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -412,9 +418,10 @@ mod tests {
             axum::serve(listener, app_local).await.unwrap();
         });
 
-        let app = core_router(Arc::new(
-            WorkspaceProxy::new(format!("http://{address}")).with_resolver(Arc::new(EchoIdentity)),
-        ))
+        let app = core_router(
+            Arc::new(EchoIdentity),
+            Arc::new(WorkspaceProxy::new(format!("http://{address}"))),
+        )
         .await;
         let response = app
             .oneshot(
