@@ -120,57 +120,62 @@ describe('Layout', () => {
     expect(nav).toContainElement(signOut);
   });
 
-  it('offers the sign out control from the collapsed drawer too', async () => {
+  it('offers the sign out control from the collapsed rail too', async () => {
     const user = userEvent.setup();
     renderLayout();
 
     await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
-    await user.click(screen.getByRole('button', { name: S.nav.showNavigation }));
 
-    expect(screen.getByTestId('app-drawer')).toContainElement(
+    expect(screen.getByTestId('app-rail')).toContainElement(
       screen.getByRole('button', { name: S.app.signOut }),
     );
   });
 
-  it('collapses the navigation into the short menu bar', async () => {
+  it('collapses the navigation into an icon rail on the left', async () => {
     const user = userEvent.setup();
     const { container } = renderLayout();
 
     await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
 
     expect(container.querySelector('.l-navigation')).toBeNull();
-    expect(container.querySelector('.app-collapsed-bar')).toBeInTheDocument();
-    expect(screen.getByTestId('app-drawer')).not.toHaveClass('app-drawer--open');
+    const rail = screen.getByTestId('app-rail');
+    expect(rail).toBeInTheDocument();
+    expect(container.querySelector('.app-collapsed-bar')).toBeNull();
+    expect(container.querySelector('.app-drawer')).toBeNull();
+    expect(container.querySelector('.app-content--rail')).toBeInTheDocument();
   });
 
-  it('opens the drawer from the menu bar', async () => {
+  it('keeps the rail destinations reachable by their accessible names', async () => {
     const user = userEvent.setup();
     renderLayout();
 
     await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
-    const toggle = screen.getByRole('button', { name: S.nav.showNavigation });
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
-    await user.click(toggle);
-
-    expect(screen.getByTestId('app-drawer')).toHaveClass('app-drawer--open');
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByText(S.nav.projects)).toBeInTheDocument();
+    const rail = screen.getByTestId('app-rail');
+    expect(rail).toContainElement(screen.getByRole('link', { name: S.nav.projects }));
+    expect(rail).toContainElement(screen.getByRole('link', { name: S.nav.needsYou }));
+    expect(rail).toContainElement(screen.getByRole('link', { name: S.nav.settings }));
   });
 
-  it('does not offer to collapse again from inside the drawer', async () => {
+  it('expands the navigation from the rail', async () => {
     const user = userEvent.setup();
-    renderLayout();
+    const { container } = renderLayout();
 
     await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
     await user.click(screen.getByRole('button', { name: S.nav.showNavigation }));
 
-    expect(screen.queryByRole('button', { name: S.nav.hideNavigation })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('app-rail')).not.toBeInTheDocument();
+    expect(container.querySelector('.l-navigation')).toBeInTheDocument();
+    expect(container.querySelector('.app-content--rail')).toBeNull();
   });
 
-  it('keeps the drawer closed on the first render', () => {
+  it('does not offer to collapse again from the rail', async () => {
+    const user = userEvent.setup();
     renderLayout();
-    expect(screen.queryByTestId('app-drawer')).not.toBeInTheDocument();
+
+    await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
+
+    expect(screen.queryByRole('button', { name: S.nav.hideNavigation })).not.toBeInTheDocument();
   });
 
   it('starts with the navigation open again after a remount', async () => {
