@@ -12,9 +12,6 @@ pub mod modules;
 #[openapi(
     paths(
         modules::health::health_check,
-        modules::orgs::list_orgs,
-        modules::orgs::create_org,
-        modules::orgs::get_org,
         modules::projects::list_projects,
         modules::projects::create_project,
         modules::projects::get_project,
@@ -22,15 +19,12 @@ pub mod modules;
     components(
         schemas(
             modules::health::HealthResponse,
-            modules::orgs::OrgResponse,
-            modules::orgs::CreateOrgRequest,
             modules::projects::ProjectResponse,
             modules::projects::CreateProjectRequest,
         ),
     ),
     tags(
         (name = "health", description = "Health check endpoints"),
-        (name = "orgs", description = "Org management endpoints"),
         (name = "projects", description = "Project management endpoints"),
     )
 )]
@@ -38,11 +32,6 @@ pub struct ApiDoc;
 
 fn application_routes() -> Router<PgPool> {
     Router::new()
-        .route(
-            "/api/v1/orgs",
-            get(modules::orgs::list_orgs).post(modules::orgs::create_org),
-        )
-        .route("/api/v1/orgs/{id}", get(modules::orgs::get_org))
         .route(
             "/api/v1/projects",
             get(modules::projects::list_projects).post(modules::projects::create_project),
@@ -138,7 +127,7 @@ mod tests {
     fn api_doc_generates() {
         let doc = ApiDoc::openapi();
         assert!(doc.paths.paths.contains_key("/health"));
-        assert!(doc.paths.paths.contains_key("/api/v1/orgs"));
+        assert!(doc.paths.paths.contains_key("/api/v1/projects"));
     }
 
     #[tokio::test]
@@ -157,7 +146,7 @@ mod tests {
     #[tokio::test]
     async fn a_protected_route_without_a_session_is_refused() {
         assert_eq!(
-            call(router(), "/api/v1/orgs").await,
+            call(router(), "/api/v1/projects").await,
             axum::http::StatusCode::UNAUTHORIZED
         );
     }
