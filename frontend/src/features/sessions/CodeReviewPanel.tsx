@@ -1,145 +1,144 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Chip, MainTable } from '@canonical/react-components';
-import type { MainTableProps } from '@canonical/react-components';
+import { Button, Chip } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
-import { getSessionDiff, getVcsStatus, type DiffLine } from '../../lib/api/opencode';
+import { getSessionDiff, listMessages } from '../../lib/api/opencode';
 import { getErrorMessage } from '../../lib/api/errors';
 import { queryKeys } from '../../lib/routes';
+import { needsPatch, reviewDiffs, type ReviewDiff } from '../../lib/diff/session';
+import { DiffViewer } from './DiffViewer';
 import { S } from '../../strings/catalogue';
 
-type Row = NonNullable<MainTableProps['rows']>[number];
-
-const STATUS_APPEARANCE: Record<string, 'caution' | 'information' | 'negative' | 'positive'> =
-  {
-    added: 'positive',
-    modified: 'caution',
-    deleted: 'negative',
-    renamed: 'information',
-  };
-
-function lineClass(line: DiffLine): string {
-  if (line.kind === 'add') return 'app-diff__line app-diff__line--added';
-  if (line.kind === 'remove') return 'app-diff__line app-diff__line--removed';
-  return 'app-diff__line';
-}
-
-function linePrefix(line: DiffLine): string {
-  if (line.kind === 'add') return '+';
-  if (line.kind === 'remove') return '-';
-  return ' ';
-}
+const STATUS_APPEARANCE: Record<string, 'caution' | 'information' | 'negative' | 'positive'> = {
+  added: 'positive',
+  modified: 'caution',
+  deleted: 'negative',
+  renamed: 'information',
+};
 
 export function CodeReviewPanel({ sessionId }: { sessionId: string }) {
   const [selected, setSelected] = useState<string | null>(null);
 
-  const vcsQuery = useQuery({
-    queryKey: queryKeys.opencode.vcs(),
-    queryFn: getVcsStatus,
+  // The same query the chat uses, so the panel adds no request of its own.
+  const messagesQuery = useQuery({
+    queryKey: queryKeys.opencode.messages(sessionId),
+    queryFn: () => listMessages(sessionId),
     retry: false,
   });
 
-  const diffQuery = useQuery({
-    queryKey: queryKeys.opencode.diff(sessionId),
-    queryFn: () => getSessionDiff(sessionId),
+  const diffs = reviewDiffs(messagesQuery.data?.messages ?? []);
+  const active = diffs.find((diff) => diff.file === selected) ?? diffs[0] ?? null;
+  const needsLoading = active ? needsPatch(active) : false;
+
+  // A summary reports the counts but often not the patch, so fetch it for the
+  // file on screen. Scoping the request to its message is the only way to get it.
+  const patchQuery = useQuery({
+    queryKey: queryKeys.opencode.diff(sessionId, active?.messageID),
+    queryFn: () => getSessionDiff(sessionId, active?.messageID),
+    enabled: needsLoading && !!active?.messageID,
     retry: false,
   });
 
-  const diffs = diffQuery.data ?? [];
-  const active = diffs.find((diff) => diff.path === selected) ?? diffs[0] ?? null;
-
-  const rows: Row[] = (vcsQuery.data ?? []).map((file) => ({
-    columns: [
-      {
-        content: (
-          <a
-            href="#"
-            onClick={(event) => {
-              event.preventDefault();
-              setSelected(file.file);
-            }}
-          >
-            {file.file}
-          </a>
-        ),
-      },
-      {
-        content: (
-          <Chip
-            value={file.status ?? S.review.unknown}
-            appearance={STATUS_APPEARANCE[file.status ?? ''] ?? 'information'}
-            isReadOnly
-            isDense
-          />
-        ),
-      },
-      { content: `+${file.additions ?? 0}` },
-      { content: `-${file.deletions ?? 0}` },
-    ],
-  }));
-
-  const empty = !vcsQuery.isLoading && !vcsQuery.error && !(vcsQuery.data ?? []).length;
+  const patch =
+    patchQuery.data?.find((entry) => entry.file === active?.file)?.patch ?? active?.patch ?? '';
+  const loading =
+    messagesQuery.isLoading || (needsLoading && patchQuery.isLoading && !patchQuery.error);
 
   return (
-    <section className="app-section">
+    <section className="app-review">
       <h2 className="app-panel-heading">{S.review.title}</h2>
 
       <DataState
-        loading={vcsQuery.isLoading}
-        error={vcsQuery.error ? getErrorMessage(vcsQuery.error) : null}
-        empty={empty}
-        emptyIcon="document"
+        loading={loading}
+        error={messagesQuery.error ? getErrorMessage(messagesQuery.error) : null}
+        empty={!messagesQuery.isLoading && !messagesQuery.error && diffs.length === 0}
+        emptyIcon="file-blank"
         emptyTitle={S.review.emptyTitle}
         emptyBody={S.review.emptyBody}
-        onRetry={() => vcsQuery.refetch()}
+        onRetry={() => messagesQuery.refetch()}
       >
-        <MainTable
-          headers={[
-            { content: S.review.columns.file },
-            { content: S.review.columns.status },
-            { content: S.review.columns.additions },
-            { content: S.review.columns.deletions },
-          ]}
-          rows={rows}
-          responsive
-        />
-      </DataState>
+        <div className="app-review__panes">
+          <ul className="app-review__files" aria-label={S.review.filesLabel}>
+            {diffs.map((diff) => (
+              <FileRow
+                key={diff.file}
+                diff={diff}
+                active={diff.file === active?.file}
+                onSelect={() => setSelected(diff.file)}
+              />
+            ))}
+          </ul>
 
-      {active ? (
-        <div>
-          <div className="app-page-header">
-            <h3 className="p-heading--5 u-no-margin--bottom">{active.path}</h3>
+          <div className="app-review__viewer">
+            {patchQuery.error ? (
+              <p className="u-no-margin--bottom" data-testid="review-diff-error">
+                {getErrorMessage(patchQuery.error)}
+              </p>
+            ) : active && patch ? (
+              <>
+                <div className="app-review__viewer-header">
+                  <h3 className="p-heading--5 u-no-margin--bottom">{active.file}</h3>
+                  <Chip
+                    value={`+${active.additions} -${active.deletions}`}
+                    appearance={active.additions > 0 ? 'positive' : 'information'}
+                    isReadOnly
+                    isDense
+                  />
+                </div>
+                <DiffViewer file={active.file} patch={patch} />
+              </>
+            ) : (
+              <p className="u-no-margin--bottom">{S.review.noPatch}</p>
+            )}
+          </div>
+        </div>
+      </DataState>
+    </section>
+  );
+}
+
+function FileRow({
+  diff,
+  active,
+  onSelect,
+}: {
+  diff: ReviewDiff;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const slash = diff.file.lastIndexOf('/');
+  const base = slash === -1 ? diff.file : diff.file.slice(slash + 1);
+  const directory = slash === -1 ? '' : diff.file.slice(0, slash);
+
+  return (
+    <li>
+      <Button
+        className="app-review__file"
+        // The row shows the file name split across two lines and truncated, so
+        // name the button with the whole path.
+        aria-label={diff.file}
+        aria-current={active ? 'true' : undefined}
+        onClick={onSelect}
+      >
+        <span className="app-review__file-row">
+          <span className="app-review__file-base">{base}</span>
+          <span className="app-review__file-counts">
+            <span className="app-review__count app-review__count--added">+{diff.additions}</span>
+            <span className="app-review__count app-review__count--removed">-{diff.deletions}</span>
+          </span>
+        </span>
+        <span className="app-review__file-row">
+          <span className="app-review__file-dir">{directory || S.review.repositoryRoot}</span>
+          {diff.status ? (
             <Chip
-              value={`+${active.additions} -${active.deletions}`}
-              appearance={active.additions > 0 ? 'positive' : 'information'}
+              value={diff.status}
+              appearance={STATUS_APPEARANCE[diff.status] ?? 'information'}
               isReadOnly
               isDense
             />
-          </div>
-          {active.hunks.length === 0 ? (
-            <p>{S.review.noHunks}</p>
-          ) : (
-            active.hunks.map((hunk, hunkIndex) => (
-              <div key={`${active.path}-${hunkIndex}`} className="u-margin--bottom">
-                <pre className="app-diff">
-                  <span className="app-diff__header">{hunk.header}</span>
-                  {hunk.lines.map((line, lineIndex) => (
-                    <span key={lineIndex} className={lineClass(line)}>
-                      {linePrefix(line)}
-                      {line.text}
-                      {'\n'}
-                    </span>
-                  ))}
-                </pre>
-              </div>
-            ))
-          )}
-        </div>
-      ) : null}
-
-      {diffQuery.error ? (
-        <p data-testid="review-diff-error">{getErrorMessage(diffQuery.error)}</p>
-      ) : null}
-    </section>
+          ) : null}
+        </span>
+      </Button>
+    </li>
   );
 }
