@@ -290,7 +290,7 @@
 }
 
 .app-tc__meta--error {
-  color: var(--vf-color-negative-text);
+  color: var(--vf-color-border-negative);
   flex: 0 1 auto;
   max-width: 60%;
   overflow: hidden;
@@ -311,7 +311,7 @@
 }
 
 .app-tc__icon--error {
-  color: var(--vf-color-negative-text);
+  color: var(--vf-color-border-negative);
 }
 
 .app-tc__chevron,
@@ -345,7 +345,7 @@
 }
 
 .app-tc__error {
-  color: var(--vf-color-negative-text);
+  color: var(--vf-color-border-negative);
   font-size: 0.875rem;
   margin-bottom: 0.5rem;
 }
@@ -459,7 +459,7 @@
 }
 
 .app-compaction--error {
-  color: var(--vf-color-negative-text);
+  color: var(--vf-color-border-negative);
 }
 
 .app-inline-note {
@@ -597,7 +597,7 @@
 }
 
 .app-review__count--removed {
-  color: var(--vf-color-negative-text);
+  color: var(--vf-color-border-negative);
 }
 
 .app-review__viewer {
