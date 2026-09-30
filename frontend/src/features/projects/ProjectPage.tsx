@@ -2,14 +2,17 @@ import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Icon, Spinner } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
+import { WorkspaceCard } from '../workspaces/WorkspaceCard';
 import { getProject, listOrgs } from '../../lib/api/projects';
 import { getErrorMessage } from '../../lib/api/errors';
 import { queryKeys, routes } from '../../lib/routes';
 import { formatDateTime } from '../../lib/format/time';
+import { useAuthStore } from '../../stores/auth';
 import { S } from '../../strings/catalogue';
 
 export function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const user = useAuthStore((state) => state.user);
   const projectQuery = useQuery({
     queryKey: queryKeys.projects.detail(projectId ?? ''),
     queryFn: () => getProject(projectId ?? ''),
@@ -27,14 +30,14 @@ export function ProjectPage() {
 
   if (projectQuery.isLoading) {
     return (
-      <div className="app-content u-align--center u-vertically-center">
+      <div className="u-align--center u-vertically-center">
         <Spinner text={S.dataState.loading} />
       </div>
     );
   }
 
   return (
-    <div className="app-content">
+    <div>
       <DataState
         loading={false}
         error={projectQuery.error ? getErrorMessage(projectQuery.error) : null}
@@ -63,10 +66,12 @@ export function ProjectPage() {
                 element={Link}
                 to={routes.projects.design(project.id)}
               >
-                <Icon name="document" />
+                <Icon name="file-blank" />
                 {S.projects.detail.design}
               </Button>
             </div>
+
+            <WorkspaceCard projectId={project.id} userId={user?.id} />
 
             <div className="p-card">
               <div className="p-card__content">

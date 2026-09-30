@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { OC_EVENT_STREAM, toSessionEvent, type SessionEvent } from '../api/events';
+import { eventStreamFor, toSessionEvent, type SessionEvent } from '../api/events';
 import { queryKeys } from '../routes';
 import type { MessageInfo, MessagePart, OpencodeMessage, ToolPart, ToolState } from '../types';
 
@@ -92,7 +92,7 @@ export function useSessionStream(sessionId: string | null): void {
     if (!queryKey || !sessionId) return undefined;
     if (typeof EventSource === 'undefined') return undefined;
 
-    const source = new EventSource(OC_EVENT_STREAM);
+    const source = new EventSource(eventStreamFor(sessionId));
     let stopped = false;
 
     const onEvent = (raw: MessageEvent<string>) => {

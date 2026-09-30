@@ -1,5 +1,15 @@
 export const OC_EVENT_STREAM = '/api/oc/event';
 
+/**
+ * The stream carries every event from one opencode, so it is narrowed to a
+ * session where the proxy can route it. Without a session the proxy answers
+ * from its single registered target, which is what an unbound session uses.
+ */
+export function eventStreamFor(sessionId: string | null | undefined): string {
+  if (!sessionId) return OC_EVENT_STREAM;
+  return `${OC_EVENT_STREAM}?session=${encodeURIComponent(sessionId)}`;
+}
+
 export interface OcEvent {
   id?: string;
   type?: string;

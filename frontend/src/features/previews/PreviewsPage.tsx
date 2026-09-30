@@ -153,7 +153,7 @@ export function PreviewsPage() {
   }));
 
   return (
-    <div className="app-content">
+    <div>
       <div className="app-page-header">
         <h1 className="p-heading--2">{S.previews.title}</h1>
         <div className="app-page-header__actions">
