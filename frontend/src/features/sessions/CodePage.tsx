@@ -22,6 +22,8 @@ function shortId(sessionId: string): string {
   return sessionId.replace(/^ses_/, '').slice(0, 8);
 }
 
+const REVIEW_PANEL = 'review';
+
 function labelFor(session: { id: string; title?: string | null }): string {
   const title = session.title?.trim();
   if (title) return title;
@@ -66,6 +68,18 @@ export function CodePage() {
     [setSearchParams],
   );
 
+  const reviewOpen = searchParams.get('panel') === REVIEW_PANEL;
+
+  const toggleReview = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    if (reviewOpen) {
+      next.delete('panel');
+    } else {
+      next.set('panel', REVIEW_PANEL);
+    }
+    setSearchParams(next);
+  }, [reviewOpen, searchParams, setSearchParams]);
+
   const startSession = useCallback(async () => {
     const session = await openWorkspaceSession(
       userId as string,
@@ -102,14 +116,26 @@ export function CodePage() {
     <div className="app-code">
       <div className="app-page-header">
         <h2 className="p-heading--3">{S.sections.code}</h2>
-        <Button
-          appearance="positive"
-          disabled={!canStart}
-          onClick={() => startPending.mutate()}
-        >
-          <Icon name="plus" />
-          {S.code.newSession}
-        </Button>
+        <div className="app-page-header__actions">
+          <Button
+            appearance="positive"
+            disabled={!canStart}
+            onClick={() => startPending.mutate()}
+          >
+            <Icon name="plus" />
+            {S.code.newSession}
+          </Button>
+          <Button
+            appearance="base"
+            className="u-no-margin--bottom"
+            aria-pressed={reviewOpen}
+            aria-controls="code-review-panel"
+            aria-label={reviewOpen ? S.code.hideReview : S.code.showReview}
+            onClick={toggleReview}
+          >
+            <Icon name="file-blank" />
+          </Button>
+        </div>
       </div>
 
       <WorkspaceStatus state={workspaceState} onRetry={workspaceState.retry} />
@@ -132,14 +158,20 @@ export function CodePage() {
         <>
           <Tabs links={tabs} />
           {active ? (
-            <div className="app-split">
+            <div
+              className={`app-split${reviewOpen ? ' app-split--review' : ''}`}
+              data-testid="code-split"
+              data-review={reviewOpen ? 'open' : 'closed'}
+            >
               <div className="app-code__chat">
                 <ChatPanel sessionId={active} />
                 <Composer sessionId={active} />
               </div>
-              <div className="app-code__review">
-                <CodeReviewPanel sessionId={active} />
-              </div>
+              {reviewOpen ? (
+                <div className="app-code__review" id="code-review-panel">
+                  <CodeReviewPanel sessionId={active} />
+                </div>
+              ) : null}
             </div>
           ) : (
             <EmptyState title={S.code.pickTitle} image={<Icon name="quote" />}>
