@@ -1,5 +1,4 @@
 use super::types::*;
-use menzi_common::ids::OrgId;
 
 pub struct BudgetManager {
     budgets: std::collections::HashMap<String, BudgetStatus>,
@@ -25,7 +24,6 @@ impl BudgetManager {
 
     pub fn record_spend(&mut self, key: &str, amount: f64) {
         let budget = self.budgets.entry(key.to_string()).or_insert(BudgetStatus {
-            org_id: OrgId::new(),
             project_id: None,
             user_id: None,
             session_id: None,
@@ -57,8 +55,7 @@ mod tests {
         manager.set_budget(
             "user-1".to_string(),
             BudgetStatus {
-                org_id: OrgId::new(),
-                project_id: None,
+                    project_id: None,
                 user_id: None,
                 session_id: None,
                 feature: "coding".to_string(),
@@ -75,8 +72,7 @@ mod tests {
         manager.set_budget(
             "user-1".to_string(),
             BudgetStatus {
-                org_id: OrgId::new(),
-                project_id: None,
+                    project_id: None,
                 user_id: None,
                 session_id: None,
                 feature: "coding".to_string(),
@@ -99,8 +95,7 @@ mod tests {
         manager.set_budget(
             "user-1".to_string(),
             BudgetStatus {
-                org_id: OrgId::new(),
-                project_id: None,
+                    project_id: None,
                 user_id: None,
                 session_id: None,
                 feature: "coding".to_string(),
