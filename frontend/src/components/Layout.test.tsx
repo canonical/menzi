@@ -87,4 +87,13 @@ describe('Layout', () => {
       screen.getByRole('link', { name: S.sections.design }),
     ).toHaveAttribute('href', `/projects/${PROJECT.id}/design`);
   });
+
+  it('keeps the theme control in the navigation rather than the status bar', async () => {
+    const { container } = renderLayout();
+    const control = await screen.findByRole('button', { name: S.theme.system });
+    const nav = container.querySelector('.l-navigation');
+
+    expect(nav).toContainElement(control);
+    expect(container.querySelector('.l-status')).not.toContainElement(control);
+  });
 });

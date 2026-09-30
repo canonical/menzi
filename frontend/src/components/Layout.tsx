@@ -6,12 +6,12 @@ import {
   NotificationConsumer,
   SideNavigation,
   SkipLink,
-  ThemeSwitcher,
   type SideNavigationProps,
 } from '@canonical/react-components';
 import { useQuery } from '@tanstack/react-query';
 import { Logo } from './Logo';
 import { ProjectSelector } from './ProjectSelector';
+import { ThemeNavItem } from './ThemeNavItem';
 import { listProjects } from '../lib/api/projects';
 import { queryKeys, routes, type ProjectSection } from '../lib/routes';
 import { useActiveProject } from '../stores/activeProject';
@@ -66,6 +66,9 @@ export function Layout({ children }: LayoutProps) {
         { icon: 'user', label: S.nav.settings, to: routes.settings() },
       ],
     },
+    {
+      items: [<ThemeNavItem key="theme" />],
+    },
   ];
 
   if (projectPath) {
@@ -73,7 +76,7 @@ export function Layout({ children }: LayoutProps) {
       headers: projectName ?? S.sections.project,
       items: [
         { icon: 'code', label: S.sections.code, to: projectPath.code },
-        { icon: 'document', label: S.sections.design, to: projectPath.design },
+        { icon: 'file-blank', label: S.sections.design, to: projectPath.design },
         { icon: 'settings', label: S.sections.project, to: projectPath.project },
       ],
     });
@@ -87,8 +90,12 @@ export function Layout({ children }: LayoutProps) {
         logo={<Logo />}
         navItems={undefined}
         navLinkComponent={Link}
+        // The navigation is always dark, whatever the page theme is. The
+        // `--dark` marker is how Vanilla themes the icons that predate its
+        // theme tokens, so without it they render dark on the dark panel.
+        navigationClassName="app-navigation--dark"
         sideNavigation={
-          <div className="l-navigation__drawer">
+          <div>
             <div className="app-navigation-selector">
               <ProjectSelector sectionFor={sectionForPath} />
             </div>
@@ -97,10 +104,9 @@ export function Layout({ children }: LayoutProps) {
         }
         status={
           <div className="app-status-bar">
-            <ThemeSwitcher />
             {user ? (
               <>
-                <span className="u-off-left--small">{user.name}</span>
+                <span className="u-off-screen">{user.name}</span>
                 <Button appearance="link" onClick={logout}>
                   {S.app.signOut}
                 </Button>
