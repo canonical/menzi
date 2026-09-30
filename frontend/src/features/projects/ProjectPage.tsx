@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Button, Icon, Spinner } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
 import { WorkspaceCard } from '../workspaces/WorkspaceCard';
-import { getProject, listOrgs } from '../../lib/api/projects';
+import { getProject } from '../../lib/api/projects';
 import { getErrorMessage } from '../../lib/api/errors';
 import { queryKeys, routes } from '../../lib/routes';
 import { formatDateTime } from '../../lib/format/time';
@@ -20,13 +20,7 @@ export function ProjectPage() {
     retry: false,
   });
 
-  const orgsQuery = useQuery({
-    queryKey: queryKeys.orgs.all(),
-    queryFn: listOrgs,
-  });
-
   const project = projectQuery.data;
-  const org = (orgsQuery.data ?? []).find((item) => item.id === project?.org_id);
 
   if (projectQuery.isLoading) {
     return (
@@ -78,10 +72,6 @@ export function ProjectPage() {
                 <dl className="p-definition-list">
                   <dt className="p-definition-list__term">{S.projects.detail.slug}</dt>
                   <dd className="p-definition-list__definition">{project.slug}</dd>
-                  <dt className="p-definition-list__term">{S.projects.detail.org}</dt>
-                  <dd className="p-definition-list__definition">
-                    {org?.name ?? project.org_id}
-                  </dd>
                   <dt className="p-definition-list__term">{S.projects.detail.created}</dt>
                   <dd className="p-definition-list__definition">
                     {formatDateTime(project.created_at)}
