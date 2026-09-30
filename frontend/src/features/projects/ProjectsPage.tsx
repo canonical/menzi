@@ -9,14 +9,12 @@ import {
   Input,
   MainTable,
   Modal,
-  Select,
   Spinner,
   useNotify,
 } from '@canonical/react-components';
 import type { MainTableProps } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
-import { NoOrgState } from './NoOrgState';
-import { createProject, listOrgs, listProjects } from '../../lib/api/projects';
+import { createProject, listProjects } from '../../lib/api/projects';
 import { getErrorMessage, isApiError } from '../../lib/api/errors';
 import { queryKeys, routes } from '../../lib/routes';
 import { formatDateTime } from '../../lib/format/time';
@@ -36,19 +34,13 @@ function slugify(value: string): string {
 
 export function ProjectsPage() {
   const [search, setSearch] = useState('');
-  const [orgId, setOrgId] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const queryClient = useQueryClient();
   const notify = useNotify();
 
   const projectsQuery = useQuery({
-    queryKey: queryKeys.projects.filtered({ orgId, search }),
-    queryFn: () => listProjects({ orgId: orgId || undefined, search: search || undefined }),
-  });
-
-  const orgsQuery = useQuery({
-    queryKey: queryKeys.orgs.all(),
-    queryFn: listOrgs,
+    queryKey: queryKeys.projects.filtered({ search }),
+    queryFn: () => listProjects({ search: search || undefined }),
   });
 
   const createMutation = useMutation({
@@ -62,11 +54,6 @@ export function ProjectsPage() {
       notify.failure(S.projects.toasts.failed, error, getErrorMessage(error)),
   });
 
-  const hasNoOrg =
-    !orgsQuery.isLoading && !orgsQuery.error && (orgsQuery.data?.length ?? 0) === 0;
-
-  const orgNames = new Map((orgsQuery.data ?? []).map((org) => [org.id, org.name]));
-
   const rows: Row[] = (projectsQuery.data ?? []).map((project) => ({
     columns: [
       {
@@ -75,7 +62,6 @@ export function ProjectsPage() {
         ),
       },
       { content: project.slug },
-      { content: orgNames.get(project.org_id) ?? project.org_id },
       { content: formatDateTime(project.updated_at) },
       {
         content: (
@@ -101,10 +87,6 @@ export function ProjectsPage() {
       },
     ],
   }));
-
-  if (hasNoOrg) {
-    return <NoOrgState />;
-  }
 
   return (
     <div className="app-section">
@@ -132,18 +114,6 @@ export function ProjectsPage() {
             onChange={(event) => setSearch(event.target.value)}
           />
         </div>
-        <div className="app-toolbar__field">
-          <Select
-            id="projects-org"
-            label={S.projects.filterLabel}
-            options={[
-              { value: '', label: S.projects.filterAll },
-              ...(orgsQuery.data ?? []).map((org) => ({ value: org.id, label: org.name })),
-            ]}
-            value={orgId}
-            onChange={(event) => setOrgId(event.target.value)}
-          />
-        </div>
       </div>
 
       <DataState
@@ -159,7 +129,6 @@ export function ProjectsPage() {
           headers={[
             { content: S.projects.columns.name },
             { content: S.projects.columns.slug },
-            { content: S.projects.columns.org },
             { content: S.projects.columns.updated },
             { content: S.projects.columns.actions },
           ]}
@@ -170,7 +139,6 @@ export function ProjectsPage() {
 
       {createOpen && (
         <CreateProjectModal
-          orgs={orgsQuery.data ?? []}
           pending={createMutation.isPending}
           error={
             createMutation.error
@@ -191,12 +159,10 @@ export function ProjectsPage() {
 }
 
 interface CreateProjectModalProps {
-  orgs: { id: string; name: string }[];
   pending: boolean;
   error: string | null;
   onClose: () => void;
   onSubmit: (input: {
-    orgId: string;
     name: string;
     slug: string;
     description?: string;
@@ -204,7 +170,6 @@ interface CreateProjectModalProps {
 }
 
 function CreateProjectModal({
-  orgs,
   pending,
   error,
   onClose,
@@ -214,14 +179,10 @@ function CreateProjectModal({
   const [slug, setSlug] = useState('');
   const [slugTouched, setSlugTouched] = useState(false);
   const [description, setDescription] = useState('');
-  const [chosenOrg, setChosenOrg] = useState('');
   const [fieldErrors, setFieldErrors] = useState<{
     name: string | null;
     slug: string | null;
-    org: string | null;
-  }>({ name: null, slug: null, org: null });
-
-  const org = chosenOrg || orgs[0]?.id || '';
+  }>({ name: null, slug: null });
 
   const handleName = (value: string) => {
     setName(value);
@@ -235,11 +196,9 @@ function CreateProjectModal({
       : SLUG_PATTERN.test(slug)
         ? null
         : S.projects.errors.slugInvalid;
-    const nextOrg = org ? null : S.projects.errors.orgRequired;
-    setFieldErrors({ name: nextName, slug: nextSlug, org: nextOrg });
-    if (nextName || nextSlug || nextOrg) return;
+    setFieldErrors({ name: nextName, slug: nextSlug });
+    if (nextName || nextSlug) return;
     onSubmit({
-      orgId: org,
       name: name.trim(),
       slug: slug.trim(),
       description: description.trim() || undefined,
@@ -293,14 +252,6 @@ function CreateProjectModal({
             setSlugTouched(true);
             setSlug(event.target.value);
           }}
-        />
-        <Select
-          id="new-project-org"
-          label={S.projects.orgLabel}
-          options={orgs.map((item) => ({ value: item.id, label: item.name }))}
-          value={org}
-          error={fieldErrors.org}
-          onChange={(event) => setChosenOrg(event.target.value)}
         />
         <Input
           id="new-project-description"
