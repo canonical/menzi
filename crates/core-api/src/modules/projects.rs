@@ -7,13 +7,11 @@ use sqlx::PgPool;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::identity::Caller;
-use crate::modules::orgs::caller_uuid;
+use crate::identity::{caller_uuid, Caller};
 
 #[derive(Serialize, ToSchema)]
 pub struct ProjectResponse {
     pub id: String,
-    pub org_id: String,
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
@@ -23,7 +21,6 @@ pub struct ProjectResponse {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateProjectRequest {
-    pub org_id: Option<String>,
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
@@ -31,31 +28,28 @@ pub struct CreateProjectRequest {
 
 #[derive(Deserialize, ToSchema)]
 pub struct ListProjectsQuery {
-    pub org_id: Option<String>,
     pub search: Option<String>,
 }
 
 const MAX_NAME_LENGTH: usize = 120;
 
-fn map_row(
-    row: (
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        String,
-        String,
-    ),
-) -> ProjectResponse {
+type ProjectRow = (
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+);
+
+fn map_row(row: ProjectRow) -> ProjectResponse {
     ProjectResponse {
         id: row.0,
-        org_id: row.1,
-        name: row.2,
-        slug: row.3,
-        description: row.4,
-        created_at: row.5,
-        updated_at: row.6,
+        name: row.1,
+        slug: row.2,
+        description: row.3,
+        created_at: row.4,
+        updated_at: row.5,
     }
 }
 
@@ -68,11 +62,11 @@ fn error_response(status: StatusCode, message: &str) -> Response {
     path = "/api/v1/projects",
     tag = "projects",
     params(
-        ("org_id" = Option<String>, Query, description = "Filter by org"),
         ("search" = Option<String>, Query, description = "Filter by name or slug")
     ),
     responses(
-        (status = 200, description = "List projects", body = Vec<ProjectResponse>)
+        (status = 200, description = "Projects the caller is a member of", body = Vec<ProjectResponse>),
+        (status = 401, description = "No caller established")
     )
 )]
 pub async fn list_projects(
@@ -80,45 +74,32 @@ pub async fn list_projects(
     Extension(caller): Extension<Caller>,
     Query(query): Query<ListProjectsQuery>,
 ) -> Response {
-    let search = query
-        .search
-        .map(|value| format!("%{}%", value.trim().to_lowercase()));
     let Some(caller_id) = caller_uuid(&caller) else {
-        return (StatusCode::OK, Json(Vec::<ProjectResponse>::new())).into_response();
-    };
-    let org_filter = match query.org_id.as_deref() {
-        Some(value) if Uuid::parse_str(value).is_ok() => Some(Uuid::parse_str(value).ok()),
-        Some(_) => {
-            return error_response(StatusCode::BAD_REQUEST, "org_id must be a uuid").into_response()
-        }
-        None => None,
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "who is calling is not established",
+        );
     };
 
-    let rows = sqlx::query_as::<
-        _,
-        (
-            String,
-            String,
-            String,
-            String,
-            Option<String>,
-            String,
-            String,
-        ),
-    >(
-        "SELECT p.id::text, p.org_id::text, p.name, p.slug, p.description, \
-         p.created_at::text, p.updated_at::text \
+    let search = query
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("%{}%", value.to_lowercase()));
+
+    let rows = sqlx::query_as::<_, ProjectRow>(
+        "SELECT p.id::text, p.name, p.slug, p.description, p.created_at::text, \
+         p.updated_at::text \
          FROM projects p \
          JOIN project_members m ON m.project_id = p.id \
-         WHERE m.user_id = $3::uuid \
-         AND ($1::uuid IS NULL OR p.org_id = $1::uuid) \
+         WHERE m.user_id = $1::uuid \
          AND ($2::text IS NULL OR lower(p.name) LIKE $2::text OR lower(p.slug) LIKE $2::text) \
          GROUP BY p.id \
          ORDER BY p.updated_at DESC",
     )
-    .bind(org_filter)
-    .bind(search.as_deref())
     .bind(caller_id)
+    .bind(search.as_deref())
     .fetch_all(&pool)
     .await;
 
@@ -142,8 +123,7 @@ pub async fn list_projects(
     responses(
         (status = 201, description = "Project created", body = ProjectResponse),
         (status = 400, description = "Invalid request"),
-        (status = 404, description = "Org not found"),
-        (status = 409, description = "Slug already used in this org")
+        (status = 409, description = "Slug already used")
     )
 )]
 pub async fn create_project(
@@ -180,41 +160,11 @@ pub async fn create_project(
             "slug may only contain lowercase letters, digits and hyphens",
         );
     }
-    // A caller who has not created an organisation yet may omit the org, in
-    // which case the project goes into the one they own.
-    let org_id = match body.org_id.as_deref() {
-        Some(value) => match Uuid::parse_str(value) {
-            Ok(parsed) => parsed,
-            Err(_) => return error_response(StatusCode::BAD_REQUEST, "org_id must be a uuid"),
-        },
-        None => match caller_org(&pool, caller_id).await {
-            Some(org) => org,
-            None => {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "create an organisation before your first project",
-                )
-            }
-        },
-    };
 
-    let row = sqlx::query_as::<
-        _,
-        (
-            String,
-            String,
-            String,
-            String,
-            Option<String>,
-            String,
-            String,
-        ),
-    >(
-        "INSERT INTO projects (org_id, name, slug, description) VALUES ($1, $2, $3, $4) \
-         RETURNING id::text, org_id::text, name, slug, description, created_at::text, \
-         updated_at::text",
+    let row = sqlx::query_as::<_, ProjectRow>(
+        "INSERT INTO projects (name, slug, description) VALUES ($1, $2, $3) \
+         RETURNING id::text, name, slug, description, created_at::text, updated_at::text",
     )
-    .bind(org_id)
     .bind(body.name.trim())
     .bind(body.slug.trim().to_lowercase())
     .bind(body.description.as_deref())
@@ -223,13 +173,10 @@ pub async fn create_project(
 
     let created = match row {
         Ok(row) => map_row(row),
-        Err(sqlx::Error::Database(error)) if error.is_foreign_key_violation() => {
-            return error_response(StatusCode::NOT_FOUND, "org not found");
-        }
         Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => {
             return error_response(
                 StatusCode::CONFLICT,
-                "a project with this slug already exists in this org",
+                "a project with this slug already exists",
             );
         }
         Err(error) => {
@@ -237,8 +184,6 @@ pub async fn create_project(
         }
     };
 
-    // The creator owns what they create, so the project is visible to them
-    // without a second membership step.
     if let Err(error) = sqlx::query(
         "INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'owner')",
     )
@@ -251,15 +196,6 @@ pub async fn create_project(
     }
 
     (StatusCode::CREATED, Json(created)).into_response()
-}
-
-async fn caller_org(pool: &PgPool, caller_id: Uuid) -> Option<Uuid> {
-    sqlx::query_scalar::<_, Uuid>("SELECT org_id FROM users WHERE id = $1 AND org_id IS NOT NULL")
-        .bind(caller_id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten()
 }
 
 #[utoipa::path(
@@ -277,20 +213,9 @@ pub async fn get_project(State(pool): State<PgPool>, Path(id): Path<String>) -> 
         return error_response(StatusCode::NOT_FOUND, "project not found");
     }
 
-    let row = sqlx::query_as::<
-        _,
-        (
-            String,
-            String,
-            String,
-            String,
-            Option<String>,
-            String,
-            String,
-        ),
-    >(
-        "SELECT id::text, org_id::text, name, slug, description, created_at::text, \
-         updated_at::text FROM projects WHERE id = $1::uuid",
+    let row = sqlx::query_as::<_, ProjectRow>(
+        "SELECT id::text, name, slug, description, created_at::text, updated_at::text \
+         FROM projects WHERE id = $1::uuid",
     )
     .bind(Uuid::parse_str(&id).ok())
     .fetch_optional(&pool)
