@@ -3,17 +3,15 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use menzi_common::ids::{OrgId, ProjectId, UserId};
+use menzi_common::ids::{ProjectId, UserId};
 use serde_json::json;
 
-pub const HEADER_ORG_ID: &str = "x-menzi-org-id";
 pub const HEADER_PROJECT_ID: &str = "x-menzi-project-id";
 pub const HEADER_USER_ID: &str = "x-menzi-user-id";
 pub const HEADER_SESSION_ID: &str = "x-menzi-session-id";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenantContext {
-    pub org_id: OrgId,
     pub project_id: Option<ProjectId>,
     pub user_id: Option<UserId>,
 }
@@ -36,12 +34,6 @@ fn header(headers: &HeaderMap, name: &str) -> Option<String> {
 
 impl TenantContext {
     pub fn from_headers(headers: &HeaderMap) -> Result<Self, TenantError> {
-        let org_raw = header(headers, HEADER_ORG_ID)
-            .ok_or_else(|| TenantError("missing x-menzi-org-id header".to_string()))?;
-        let org_id = org_raw
-            .parse()
-            .map_err(|_| TenantError(format!("invalid org id '{org_raw}'")))?;
-
         let project_id = match header(headers, HEADER_PROJECT_ID) {
             Some(raw) => Some(
                 raw.parse()
@@ -58,17 +50,25 @@ impl TenantContext {
             None => None,
         };
 
+        if project_id.is_none() && user_id.is_none() {
+            return Err(TenantError(
+                "missing x-menzi-project-id or x-menzi-user-id header".to_string(),
+            ));
+        }
+
         Ok(Self {
-            org_id,
             project_id,
             user_id,
         })
     }
 
     pub fn scope_key(&self) -> String {
-        match self.project_id {
-            Some(project_id) => format!("{}:{}", self.org_id, project_id),
-            None => format!("{}", self.org_id),
+        if let Some(project_id) = self.project_id {
+            return format!("project:{project_id}");
+        }
+        match self.user_id {
+            Some(user_id) => format!("user:{user_id}"),
+            None => Self::default_scope(),
         }
     }
 
@@ -103,23 +103,18 @@ mod tests {
     use axum::Router;
     use tower::ServiceExt;
 
-    fn org_header() -> String {
-        OrgId::new().to_string()
-    }
-
     #[test]
-    fn from_headers_parses_org_only() {
+    fn from_headers_parses_user_only() {
         let mut headers = HeaderMap::new();
-        headers.insert(HEADER_ORG_ID, org_header().parse().unwrap());
+        headers.insert(HEADER_USER_ID, UserId::new().to_string().parse().unwrap());
         let tenant = TenantContext::from_headers(&headers).unwrap();
         assert!(tenant.project_id.is_none());
-        assert!(tenant.user_id.is_none());
+        assert!(tenant.user_id.is_some());
     }
 
     #[test]
     fn from_headers_parses_full_tenant() {
         let mut headers = HeaderMap::new();
-        headers.insert(HEADER_ORG_ID, OrgId::new().to_string().parse().unwrap());
         headers.insert(
             HEADER_PROJECT_ID,
             ProjectId::new().to_string().parse().unwrap(),
@@ -131,37 +126,38 @@ mod tests {
     }
 
     #[test]
-    fn from_headers_rejects_missing_org() {
+    fn from_headers_rejects_an_empty_tenant() {
         let headers = HeaderMap::new();
         let error = TenantContext::from_headers(&headers).unwrap_err();
-        assert!(error.0.contains("x-menzi-org-id"));
+        assert!(error.0.contains("x-menzi-project-id"));
     }
 
     #[test]
-    fn from_headers_rejects_invalid_org() {
+    fn from_headers_rejects_an_invalid_project() {
         let mut headers = HeaderMap::new();
-        headers.insert(HEADER_ORG_ID, "not-a-uuid".parse().unwrap());
+        headers.insert(HEADER_PROJECT_ID, "not-a-uuid".parse().unwrap());
         assert!(TenantContext::from_headers(&headers).is_err());
     }
 
     #[test]
     fn scope_key_uses_project_when_present() {
-        let org_id = OrgId::new();
         let project_id = ProjectId::new();
         let mut headers = HeaderMap::new();
-        headers.insert(HEADER_ORG_ID, org_id.to_string().parse().unwrap());
-        headers.insert(HEADER_PROJECT_ID, project_id.to_string().parse().unwrap());
+        headers.insert(
+            HEADER_PROJECT_ID,
+            project_id.to_string().parse().unwrap(),
+        );
         let tenant = TenantContext::from_headers(&headers).unwrap();
-        assert_eq!(tenant.scope_key(), format!("{org_id}:{project_id}"));
+        assert_eq!(tenant.scope_key(), format!("project:{project_id}"));
     }
 
     #[test]
-    fn scope_key_uses_org_without_project() {
-        let org_id = OrgId::new();
+    fn scope_key_uses_user_without_project() {
+        let user_id = UserId::new();
         let mut headers = HeaderMap::new();
-        headers.insert(HEADER_ORG_ID, org_id.to_string().parse().unwrap());
+        headers.insert(HEADER_USER_ID, user_id.to_string().parse().unwrap());
         let tenant = TenantContext::from_headers(&headers).unwrap();
-        assert_eq!(tenant.scope_key(), org_id.to_string());
+        assert_eq!(tenant.scope_key(), format!("user:{user_id}"));
     }
 
     #[tokio::test]
@@ -172,12 +168,12 @@ mod tests {
                 Json(json!({"scope": tenant.scope_key()}))
             }),
         );
-        let org_id = OrgId::new();
+        let user_id = UserId::new();
         let response = app
             .oneshot(
                 Request::builder()
                     .uri("/tenant")
-                    .header(HEADER_ORG_ID, org_id.to_string())
+                    .header(HEADER_USER_ID, user_id.to_string())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -187,7 +183,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extractor_rejects_missing_org() {
+    async fn extractor_rejects_an_empty_tenant() {
         let app = Router::new().route(
             "/tenant",
             get(|TenantExtractor(_): TenantExtractor| async { StatusCode::OK }),
@@ -212,12 +208,12 @@ mod tests {
                 Json(json!({"scope": tenant.scope_key()}))
             }),
         );
-        let org_id = OrgId::new();
+        let project_id = ProjectId::new();
         let response = app
             .oneshot(
                 Request::builder()
                     .uri("/tenant")
-                    .header(HEADER_ORG_ID, org_id.to_string())
+                    .header(HEADER_PROJECT_ID, project_id.to_string())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -227,6 +223,6 @@ mod tests {
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(body["scope"], org_id.to_string());
+        assert_eq!(body["scope"], format!("project:{project_id}"));
     }
 }
