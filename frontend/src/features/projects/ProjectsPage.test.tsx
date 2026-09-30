@@ -149,7 +149,112 @@ describe('ProjectsPage', () => {
     await user.click(confirmButtons[confirmButtons.length - 1]);
 
     expect(await screen.findByText(S.projects.errors.nameRequired)).toBeInTheDocument();
-    expect(screen.getByText(S.projects.errors.orgRequired)).toBeInTheDocument();
+    expect(screen.queryByText(S.projects.errors.orgRequired)).not.toBeInTheDocument();
+  });
+
+  it('preselects the only org so it does not have to be chosen', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/v1/orgs')) {
+        return Promise.resolve(jsonResponse(200, [ORGS[0]]));
+      }
+      return Promise.resolve(jsonResponse(200, [PROJECTS[0]]));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Storefront');
+
+    const [openButton] = await screen.findAllByRole('button', { name: S.projects.create });
+    await user.click(openButton);
+
+    expect(await screen.findByLabelText(S.projects.orgLabel)).toHaveValue('org-1');
+  });
+
+  it('creates a project with a single org without touching the dropdown', async () => {
+    const posted: unknown[] = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/v1/orgs')) {
+        return Promise.resolve(jsonResponse(200, [ORGS[0]]));
+      }
+      if ((init?.method ?? 'GET') === 'POST') {
+        posted.push(JSON.parse(String(init?.body)));
+        return Promise.resolve(jsonResponse(201, PROJECTS[0]));
+      }
+      return Promise.resolve(jsonResponse(200, [PROJECTS[0]]));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Storefront');
+
+    const [openButton] = await screen.findAllByRole('button', { name: S.projects.create });
+    await user.click(openButton);
+
+    fireEvent.change(await screen.findByLabelText(S.projects.nameLabel), {
+      target: { value: 'Payments' },
+    });
+
+    const confirmButtons = await screen.findAllByRole('button', { name: S.projects.create });
+    await user.click(confirmButtons[confirmButtons.length - 1]);
+
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toMatchObject({ org_id: 'org-1', name: 'Payments' });
+  });
+
+  it('preselects the first org when there are several', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/v1/orgs')) {
+        return Promise.resolve(jsonResponse(200, ORGS));
+      }
+      return Promise.resolve(jsonResponse(200, [PROJECTS[0]]));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Storefront');
+
+    const [openButton] = await screen.findAllByRole('button', { name: S.projects.create });
+    await user.click(openButton);
+
+    expect(await screen.findByLabelText(S.projects.orgLabel)).toHaveValue('org-1');
+  });
+
+  it('still lets a second org be chosen', async () => {
+    const posted: unknown[] = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/v1/orgs')) {
+        return Promise.resolve(jsonResponse(200, ORGS));
+      }
+      if ((init?.method ?? 'GET') === 'POST') {
+        posted.push(JSON.parse(String(init?.body)));
+        return Promise.resolve(jsonResponse(201, PROJECTS[0]));
+      }
+      return Promise.resolve(jsonResponse(200, [PROJECTS[0]]));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Storefront');
+
+    const [openButton] = await screen.findAllByRole('button', { name: S.projects.create });
+    await user.click(openButton);
+
+    fireEvent.change(await screen.findByLabelText(S.projects.nameLabel), {
+      target: { value: 'Payments' },
+    });
+    fireEvent.change(screen.getByLabelText(S.projects.orgLabel), {
+      target: { value: 'org-2' },
+    });
+
+    const confirmButtons = await screen.findAllByRole('button', { name: S.projects.create });
+    await user.click(confirmButtons[confirmButtons.length - 1]);
+
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toMatchObject({ org_id: 'org-2' });
   });
 
   it('creates a project and refreshes the list', async () => {

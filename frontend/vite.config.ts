@@ -11,6 +11,7 @@ export default defineConfig({
     conditions: ['sass'],
   },
   server: {
+    allowedHosts: ['menzi.thinking-dragon.net'],
     proxy: {
       '/api/env': { target: orchestratorTarget, changeOrigin: true },
       '/api/tunnel': { target: sessionProxyTarget, changeOrigin: true },

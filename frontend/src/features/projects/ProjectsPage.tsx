@@ -214,12 +214,14 @@ function CreateProjectModal({
   const [slug, setSlug] = useState('');
   const [slugTouched, setSlugTouched] = useState(false);
   const [description, setDescription] = useState('');
-  const [org, setOrg] = useState('');
+  const [chosenOrg, setChosenOrg] = useState('');
   const [fieldErrors, setFieldErrors] = useState<{
     name: string | null;
     slug: string | null;
     org: string | null;
   }>({ name: null, slug: null, org: null });
+
+  const org = chosenOrg || orgs[0]?.id || '';
 
   const handleName = (value: string) => {
     setName(value);
@@ -298,7 +300,7 @@ function CreateProjectModal({
           options={orgs.map((item) => ({ value: item.id, label: item.name }))}
           value={org}
           error={fieldErrors.org}
-          onChange={(event) => setOrg(event.target.value)}
+          onChange={(event) => setChosenOrg(event.target.value)}
         />
         <Input
           id="new-project-description"
