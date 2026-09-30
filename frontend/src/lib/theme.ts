@@ -1,4 +1,5 @@
 import { applyTheme, loadTheme } from '@canonical/react-components';
+import { S } from '../strings/catalogue';
 
 export type Theme = 'system' | 'light' | 'dark';
 
@@ -52,4 +53,28 @@ export function watchSystemTheme(onChange: () => void): () => void {
   query.addEventListener('change', listener);
 
   return () => query.removeEventListener('change', listener);
+}
+
+/**
+ * The theme states have no icon in the bundled set, so the switcher uses a
+ * glyph. The two controls that render it read these rather than repeating them.
+ */
+const THEME_LABEL: Record<Theme, string> = {
+  system: S.theme.system,
+  light: S.theme.light,
+  dark: S.theme.dark,
+};
+
+const THEME_GLYPH: Record<Theme, string> = {
+  system: '◐',
+  light: '☀',
+  dark: '☾',
+};
+
+export function themeLabel(theme: Theme): string {
+  return THEME_LABEL[theme];
+}
+
+export function themeGlyph(theme: Theme): string {
+  return THEME_GLYPH[theme];
 }
