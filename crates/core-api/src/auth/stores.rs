@@ -146,11 +146,10 @@ impl PostgresAccountStore {
 }
 
 const ACCOUNT_COLUMNS: &str =
-    "id, org_id, email, name, avatar_url, password_hash, email_verified_at, created_at";
+    "id, email, name, avatar_url, password_hash, email_verified_at, created_at";
 
 type AccountRow = (
     Uuid,
-    Option<Uuid>,
     String,
     String,
     Option<String>,
@@ -162,13 +161,12 @@ type AccountRow = (
 fn user_of(row: AccountRow) -> UserRecord {
     UserRecord {
         id: row.0,
-        org_id: row.1,
-        email: row.2,
-        name: row.3,
-        avatar_url: row.4,
-        password_hash: row.5,
-        email_verified_at: row.6,
-        created_at: row.7,
+        email: row.1,
+        name: row.2,
+        avatar_url: row.3,
+        password_hash: row.4,
+        email_verified_at: row.5,
+        created_at: row.6,
     }
 }
 
@@ -233,15 +231,6 @@ impl AccountStore for PostgresAccountStore {
         .bind(hash)
         .execute(&self.pool)
         .await?;
-        Ok(())
-    }
-
-    async fn set_org(&self, id: Uuid, org_id: Uuid) -> Result<(), StoreError> {
-        sqlx::query("UPDATE users SET org_id = $2 WHERE id = $1 AND org_id IS NULL")
-            .bind(id)
-            .bind(org_id)
-            .execute(&self.pool)
-            .await?;
         Ok(())
     }
 
