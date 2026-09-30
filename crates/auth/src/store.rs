@@ -41,7 +41,6 @@ pub trait AccountStore: Send + Sync {
         verified: bool,
     ) -> Result<UserRecord, StoreError>;
     async fn set_password_hash(&self, id: Uuid, hash: &str) -> Result<(), StoreError>;
-    async fn set_org(&self, id: Uuid, org_id: Uuid) -> Result<(), StoreError>;
     async fn find_by_identity(
         &self,
         provider_id: &str,
@@ -125,7 +124,6 @@ impl AccountStore for InMemoryAccountStore {
         let now = Utc::now();
         let record = UserRecord {
             id: Uuid::new_v4(),
-            org_id: None,
             email: normalised.clone(),
             name: name.trim().to_string(),
             avatar_url: None,
@@ -148,18 +146,6 @@ impl AccountStore for InMemoryAccountStore {
                 user.password_hash = Some(hash.to_string());
                 Ok(())
             }
-            None => Err(StoreError::NotFound),
-        }
-    }
-
-    async fn set_org(&self, id: Uuid, org_id: Uuid) -> Result<(), StoreError> {
-        let mut by_id = self.by_id.lock().expect("account store lock");
-        match by_id.get_mut(&id) {
-            Some(user) if user.org_id.is_none() => {
-                user.org_id = Some(org_id);
-                Ok(())
-            }
-            Some(_) => Ok(()),
             None => Err(StoreError::NotFound),
         }
     }
@@ -637,17 +623,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_org_is_only_ever_set_once() {
+    async fn a_user_carries_no_organisation() {
         let store = InMemoryAccountStore::new();
         let user = store.create("a@b", "A", None, false).await.unwrap();
-        let first = Uuid::new_v4();
-        let second = Uuid::new_v4();
-        store.set_org(user.id, first).await.unwrap();
-        store.set_org(user.id, second).await.unwrap();
-        assert_eq!(
-            store.find_by_id(user.id).await.unwrap().unwrap().org_id,
-            Some(first)
-        );
+        assert_eq!(store.find_by_id(user.id).await.unwrap().unwrap().id, user.id);
     }
 
     #[test]
