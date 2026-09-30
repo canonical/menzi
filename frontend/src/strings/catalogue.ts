@@ -120,6 +120,7 @@ export const S = {
     settings: 'Settings',
     hideNavigation: 'Hide the navigation menu',
     showNavigation: 'Show navigation',
+    railLabel: 'Main navigation',
   },
   notFound: {
     title: 'Page not found',
