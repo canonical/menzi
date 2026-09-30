@@ -89,7 +89,10 @@ impl OrchestratorState {
 pub fn create_router(state: OrchestratorState) -> Router {
     Router::new()
         .route("/api/env/health", get(health_handler))
-        .route("/api/env/specs", get(list_specs_handler).post(register_spec_handler))
+        .route(
+            "/api/env/specs",
+            get(list_specs_handler).post(register_spec_handler),
+        )
         .route("/api/env/launch", post(launch_handler))
         .route("/api/env/relaunch", post(relaunch_handler))
         .route("/api/env/status", get(status_handler))
@@ -99,11 +102,7 @@ pub fn create_router(state: OrchestratorState) -> Router {
 }
 
 async fn health_handler() -> Response {
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"status": "ok"})),
-    )
-        .into_response()
+    (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))).into_response()
 }
 
 async fn list_specs_handler(State(state): State<OrchestratorState>) -> Response {

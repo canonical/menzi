@@ -312,6 +312,24 @@ mod tests {
             })
         }
 
+        async fn exec_in(
+            &self,
+            name: &str,
+            command: &[String],
+            cwd: Option<&str>,
+        ) -> Result<menzi_lxd::ExecResult> {
+            self.calls.lock().unwrap().push(format!(
+                "exec:{name}:{}:{}",
+                command.join(" "),
+                cwd.unwrap_or("-")
+            ));
+            Ok(menzi_lxd::ExecResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+
         async fn list_instances(&self) -> Result<Vec<menzi_lxd::Instance>> {
             Ok(vec![])
         }
@@ -319,6 +337,19 @@ mod tests {
         async fn list_snapshots(&self, name: &str) -> Result<Vec<menzi_lxd::Snapshot>> {
             self.calls.lock().unwrap().push(format!("snapshots:{name}"));
             Ok(vec![])
+        }
+
+        async fn instance_exists(&self, name: &str) -> Result<bool> {
+            self.calls.lock().unwrap().push(format!("exists:{name}"));
+            Ok(true)
+        }
+
+        async fn instance_state(&self, name: &str) -> Result<menzi_lxd::InstanceState> {
+            self.calls.lock().unwrap().push(format!("state:{name}"));
+            Ok(menzi_lxd::InstanceState {
+                status: "Running".to_string(),
+                addresses: vec!["global:10.10.10.5".to_string()],
+            })
         }
     }
 
