@@ -1,4 +1,4 @@
-use menzi_common::ids::{OrgId, ProjectId, UserId};
+use menzi_common::ids::{ProjectId, UserId};
 
 use crate::role::Role;
 
@@ -22,7 +22,6 @@ pub enum Permission {
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
     pub user_id: UserId,
-    pub org_id: OrgId,
     pub email: String,
     pub name: String,
     pub roles: Vec<(ProjectId, Role)>,
@@ -70,7 +69,6 @@ mod tests {
     fn owner_has_all_permissions() {
         let user = AuthenticatedUser {
             user_id: UserId::new(),
-            org_id: OrgId::new(),
             email: "owner@test.com".to_string(),
             name: "Owner".to_string(),
             roles: vec![(ProjectId::new(), Role::Owner)],
@@ -92,7 +90,6 @@ mod tests {
     fn reviewer_lacks_admin_permissions() {
         let user = AuthenticatedUser {
             user_id: UserId::new(),
-            org_id: OrgId::new(),
             email: "reviewer@test.com".to_string(),
             name: "Reviewer".to_string(),
             roles: vec![(ProjectId::new(), Role::Reviewer)],
@@ -110,7 +107,6 @@ mod tests {
     fn user_without_role_has_no_permissions() {
         let user = AuthenticatedUser {
             user_id: UserId::new(),
-            org_id: OrgId::new(),
             email: "none@test.com".to_string(),
             name: "None".to_string(),
             roles: vec![],
