@@ -1,8 +1,9 @@
-import { ReactNode, useEffect } from 'react';
+import { ReactNode, useCallback, useEffect, useState } from 'react';
 import { Link, useLocation, type LinkProps } from 'react-router-dom';
 import {
   ApplicationLayout,
   Button,
+  Icon,
   NotificationConsumer,
   SideNavigation,
   SkipLink,
@@ -31,12 +32,32 @@ function sectionForPath(pathname: string): ProjectSection {
   return 'code';
 }
 
+const NAV_COLLAPSED_KEY = 'menzi.nav.collapsed';
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(NAV_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export function Layout({ children }: LayoutProps) {
   const { user } = useAuthStore();
   const { signOut } = useSession();
   const location = useLocation();
   const { projectId, section, recordRoute } = useActiveProject();
   const segment = sectionForPath(location.pathname);
+  const [navCollapsed, setNavCollapsed] = useState(readCollapsed);
+
+  const toggleNav = useCallback((collapsed: boolean) => {
+    setNavCollapsed(collapsed);
+    try {
+      localStorage.setItem(NAV_COLLAPSED_KEY, collapsed ? '1' : '0');
+    } catch {
+      return;
+    }
+  }, []);
 
   useEffect(() => {
     if (projectId && (section !== segment || !projectId)) {
@@ -97,12 +118,22 @@ export function Layout({ children }: LayoutProps) {
         // theme tokens, so without it they render dark on the dark panel.
         navigationClassName="app-navigation--dark"
         sideNavigation={
-          <div>
-            <div className="app-navigation-selector">
-              <ProjectSelector sectionFor={sectionForPath} />
+          navCollapsed ? undefined : (
+            <div>
+              <div className="app-navigation-selector">
+                <ProjectSelector sectionFor={sectionForPath} />
+                <Button
+                  appearance="base"
+                  className="app-navigation-hide"
+                  aria-label={S.nav.hideNavigation}
+                  onClick={() => toggleNav(true)}
+                >
+                  <Icon name="collapse" />
+                </Button>
+              </div>
+              <SideNavigation<LinkProps> hasIcons items={navItems} linkComponent={Link} />
             </div>
-            <SideNavigation<LinkProps> hasIcons items={navItems} linkComponent={Link} />
-          </div>
+          )
         }
         status={
           <div className="app-status-bar">
@@ -118,6 +149,17 @@ export function Layout({ children }: LayoutProps) {
         }
       >
         <div className="app-content">{children}</div>
+        {navCollapsed ? (
+          <Button
+            className="app-navigation-show"
+            aria-label={S.nav.showNavigation}
+            aria-expanded={false}
+            onClick={() => toggleNav(false)}
+          >
+            <Icon name="expand" />
+            {S.nav.showNavigation}
+          </Button>
+        ) : null}
         <NotificationConsumer />
       </ApplicationLayout>
     </>
