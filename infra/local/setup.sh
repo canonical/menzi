@@ -42,3 +42,24 @@ EOF
 sudo chown -R nats:nats /var/lib/nats-server
 sudo systemctl enable --now nats-server
 sudo systemctl restart nats-server
+
+# The services talk to LXD over TLS with a client certificate. A snap LXD trusts
+# nothing by default and exposes no certificate in ~/.config/lxc, so mint one and
+# trust it. Harmless if it already exists or is already trusted.
+if command -v lxc >/dev/null 2>&1; then
+  mkdir -p "$HOME/.config/lxc"
+  if [ ! -f "$HOME/.config/lxc/client.crt" ] || [ ! -f "$HOME/.config/lxc/client.key" ]; then
+    openssl req -x509 -newkey rsa:2048 -nodes \
+      -keyout "$HOME/.config/lxc/client.key" \
+      -out "$HOME/.config/lxc/client.crt" \
+      -days 3650 -subj "/CN=menzi" -addext "extendedKeyUsage=clientAuth" 2>/dev/null
+    echo "generated an lxd client certificate in $HOME/.config/lxc"
+  fi
+  fp="$(openssl x509 -in "$HOME/.config/lxc/client.crt" -noout -fingerprint -sha256 | cut -d= -f2)"
+  if ! sudo lxc config trust list --format csv 2>/dev/null | cut -d, -f5 | tr -d ' ' | grep -qF "$fp"; then
+    sudo lxc config trust add "$HOME/.config/lxc/client.crt" && echo "trusted the lxd client certificate"
+  fi
+  export MENZI_LXD_CERT_PATH="${MENZI_LXD_CERT_PATH:-$HOME/.config/lxc/client.crt}"
+  export MENZI_LXD_KEY_PATH="${MENZI_LXD_KEY_PATH:-$HOME/.config/lxc/client.key}"
+  export MENZI_LXD_URL="${MENZI_LXD_URL:-https://127.0.0.1:8443}"
+fi

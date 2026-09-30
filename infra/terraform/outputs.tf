@@ -22,3 +22,8 @@ output "preview_instances" {
   description = "Names of the preview service instances"
   value       = lxd_instance.previews[*].name
 }
+
+output "workspace_instance" {
+  description = "Name of the workspace service instance"
+  value       = lxd_instance.workspace.name
+}

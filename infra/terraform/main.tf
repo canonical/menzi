@@ -122,3 +122,15 @@ resource "lxd_instance" "previews" {
     "boot.autostart" = "true"
   }
 }
+
+# The workspace service copies containers from the mz-workspace template that
+# infra/local/workspace-image.sh builds. Terraform cannot build that template; it
+# only runs the service.
+resource "lxd_instance" "workspace" {
+  name     = "menzi-workspace"
+  image    = var.ubuntu_image
+  profiles = [lxd_profile.menzi.name]
+  config = {
+    "boot.autostart" = "true"
+  }
+}

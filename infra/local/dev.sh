@@ -39,6 +39,7 @@ fi
 API_BIND="${MENZI_API_BIND:-$DEV_HOST:8080}"
 ORCH_BIND="${MENZI_ORCHESTRATOR_BIND:-$DEV_HOST:8081}"
 PREVIEWS_BIND="${MENZI_PREVIEWS_BIND:-$DEV_HOST:8095}"
+WORKSPACE_BIND="${MENZI_WORKSPACE_BIND:-$DEV_HOST:8096}"
 PROXY_BIND="${MENZI_SESSION_PROXY_BIND:-$DEV_HOST:8082}"
 LLM_BIND="${MENZI_LLM_GATEWAY_BIND:-$DEV_HOST:8083}"
 OPENCODE_PORT="${MENZI_OPENCODE_PORT:-17999}"
@@ -53,13 +54,23 @@ if [ ! -d "$ROOT/frontend/node_modules" ]; then
   (cd "$ROOT/frontend" && npm install)
 fi
 
-cargo build -p menzi-core-api -p menzi-orchestrator -p menzi-previews -p menzi-session-proxy -p menzi-llm-gateway
+cargo build -p menzi-core-api -p menzi-orchestrator -p menzi-previews -p menzi-workspace -p menzi-session-proxy -p menzi-llm-gateway
 
-if [ -n "${MENZI_LXD_CERT_PATH:-}" ] || [ -n "${MENZI_LXD_KEY_PATH:-}" ]; then
-  :
-elif [ -f "$HOME/.config/lxc/client.crt" ] && [ -f "$HOME/.config/lxc/client.key" ]; then
+if [ -z "${MENZI_LXD_CERT_PATH:-}" ] && [ -f "$HOME/.config/lxc/client.crt" ] && [ -f "$HOME/.config/lxc/client.key" ]; then
   export MENZI_LXD_CERT_PATH="$HOME/.config/lxc/client.crt"
   export MENZI_LXD_KEY_PATH="$HOME/.config/lxc/client.key"
+fi
+
+# core-api strips any identity header a browser sends and sets its own from the
+# verified caller. There is no token store yet, so development runs on a fixed
+# user rather than pretending a browser is authenticated.
+if [ "${MENZI_DEV_AUTH:-1}" = "1" ] && [ -z "${MENZI_DEV_USER_ID:-}" ]; then
+  DEV_USER_ID="$(PGPASSWORD=menzi psql -tA -h 127.0.0.1 -U menzi -d menzi \
+    -c 'SELECT id FROM users ORDER BY created_at LIMIT 1' 2>/dev/null || true)"
+  if [ -n "$DEV_USER_ID" ]; then
+    export MENZI_DEV_AUTH=1
+    export MENZI_DEV_USER_ID="$DEV_USER_ID"
+  fi
 fi
 
 PIDS=()
@@ -73,13 +84,21 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-setsid env MENZI_DATABASE_URL="$DB_URL" "$ROOT/target/debug/menzi-core-api" >"$LOG_DIR/core-api.log" 2>&1 &
+setsid env MENZI_DATABASE_URL="$DB_URL" MENZI_WORKSPACE_URL="http://${WORKSPACE_BIND/0.0.0.0/$WAIT_HOST}" \
+  "$ROOT/target/debug/menzi-core-api" >"$LOG_DIR/core-api.log" 2>&1 &
 PIDS+=("$!")
 setsid env MENZI_GATEWAY_BIND="$ORCH_BIND" "$ROOT/target/debug/menzi-orchestrator" >"$LOG_DIR/orchestrator.log" 2>&1 &
 PIDS+=("$!")
 setsid env MENZI_PREVIEWS_BIND="$PREVIEWS_BIND" "$ROOT/target/debug/menzi-previews" >"$LOG_DIR/previews.log" 2>&1 &
 PIDS+=("$!")
-setsid env MENZI_GATEWAY_BIND="$PROXY_BIND" "$ROOT/target/debug/menzi-session-proxy" >"$LOG_DIR/session-proxy.log" 2>&1 &
+setsid env MENZI_WORKSPACE_BIND="$WORKSPACE_BIND" MENZI_DATABASE_URL="$DB_URL" \
+  MENZI_SOURCE_INSTANCE=mz-workspace MENZI_WORKSPACE_SERVICE="session-proxy" \
+  MENZI_WORKSPACE_RECONCILE_SECS="${MENZI_WORKSPACE_RECONCILE_SECS:-30}" \
+  "$ROOT/target/debug/menzi-workspace" >"$LOG_DIR/workspace.log" 2>&1 &
+PIDS+=("$!")
+setsid env MENZI_GATEWAY_BIND="$PROXY_BIND" MENZI_WORKSPACE_URL="http://${WORKSPACE_BIND/0.0.0.0/$WAIT_HOST}" \
+  MENZI_WORKSPACE_SERVICE="session-proxy" \
+  "$ROOT/target/debug/menzi-session-proxy" >"$LOG_DIR/session-proxy.log" 2>&1 &
 PIDS+=("$!")
 setsid env MENZI_GATEWAY_BIND="$LLM_BIND" "$ROOT/target/debug/menzi-llm-gateway" >"$LOG_DIR/llm-gateway.log" 2>&1 &
 PIDS+=("$!")
@@ -134,6 +153,7 @@ fi
 wait_http "http://${API_BIND/0.0.0.0/$WAIT_HOST}/health" "control plane" 60 200
 wait_http "http://${ORCH_BIND/0.0.0.0/$WAIT_HOST}/api/env/health" "orchestrator" 60 200
 wait_http "http://${PREVIEWS_BIND/0.0.0.0/$WAIT_HOST}/api/v1/previews" "previews" 60 405
+wait_http "http://${WORKSPACE_BIND/0.0.0.0/$WAIT_HOST}/api/v1/workspaces" "workspaces" 60 405
 wait_http "http://${PROXY_BIND/0.0.0.0/$WAIT_HOST}/health" "session proxy" 60 200
 wait_http "http://${LLM_BIND/0.0.0.0/$WAIT_HOST}/v1/models" "llm gateway" 60 200
 
@@ -163,6 +183,7 @@ printf '\nmenzi dev stack running\n'
 printf '  control plane   http://%s\n' "${API_BIND/0.0.0.0/$DISPLAY_HOST}"
 printf '  orchestrator    http://%s\n' "${ORCH_BIND/0.0.0.0/$DISPLAY_HOST}"
 printf '  previews        http://%s\n' "${PREVIEWS_BIND/0.0.0.0/$DISPLAY_HOST}"
+printf '  workspaces      http://%s\n' "${WORKSPACE_BIND/0.0.0.0/$DISPLAY_HOST}"
 printf '  session proxy   http://%s\n' "${PROXY_BIND/0.0.0.0/$DISPLAY_HOST}"
 printf '  llm gateway     http://%s\n' "${LLM_BIND/0.0.0.0/$DISPLAY_HOST}"
 printf '  opencode        %s\n' "${OPENCODE_URL:-skipped}"
