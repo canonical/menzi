@@ -52,6 +52,26 @@ export const apiPaths = {
     reset: (previewId: string) => `/api/v1/previews/${previewId}/reset`,
     restart: (previewId: string) => `/api/v1/previews/${previewId}/restart`,
   },
+  workspaces: {
+    ensure: () => '/api/v1/workspaces',
+    detail: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}`,
+    start: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}/start`,
+    connect: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}/connect`,
+    suspend: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}`,
+    sessions: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}/sessions`,
+    prompt: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}/prompt`,
+    interrupt: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}/interrupt`,
+    terminal: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}/terminal`,
+    forProject: (projectId: string) => `/api/v1/projects/${projectId}/workspaces`,
+  },
   env: {
     health: () => '/api/env/health',
     specs: () => '/api/env/specs',
@@ -83,6 +103,11 @@ export const queryKeys = {
     forProject: (projectId: string) => ['projects', projectId, 'previews'] as const,
     detail: (previewId: string) => ['previews', previewId] as const,
   },
+  workspaces: {
+    detail: (userId: string, projectId: string) =>
+      ['workspaces', userId, projectId] as const,
+    forProject: (projectId: string) => ['workspaces', 'project', projectId] as const,
+  },
   env: {
     specs: () => ['env', 'specs'] as const,
     status: (sessionId: string, environmentName: string) =>
@@ -95,10 +120,14 @@ export const queryKeys = {
   },
   opencode: {
     sessions: () => ['opencode', 'sessions'] as const,
+    workspaceSessions: (userId: string, projectId: string) =>
+      ['opencode', 'workspace-sessions', userId, projectId] as const,
     messages: (sessionId: string) => ['opencode', 'messages', sessionId] as const,
     models: () => ['opencode', 'models'] as const,
     agents: () => ['opencode', 'agents'] as const,
-    vcs: () => ['opencode', 'vcs', 'status'] as const,
-    diff: (sessionId: string) => ['opencode', 'diff', sessionId] as const,
+    /** One entry per patch request. Invalidate with `diffs` to clear them all. */
+    diff: (sessionId: string, messageId?: string) =>
+      ['opencode', 'diff', sessionId, messageId ?? null] as const,
+    diffs: (sessionId: string) => ['opencode', 'diff', sessionId] as const,
   },
 };

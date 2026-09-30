@@ -3,6 +3,7 @@ import { BrowserRouter, Outlet, Route, Routes } from 'react-router-dom';
 import { Spinner } from '@canonical/react-components';
 import { Layout } from './components/Layout';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { useCurrentUser } from './stores/useCurrentUser';
 import { S } from './strings/catalogue';
 
 function lazyPage(name: string, loader: () => Promise<Record<string, ComponentType>>) {
@@ -33,6 +34,7 @@ function PageFallback() {
 }
 
 function AppShell() {
+  useCurrentUser();
   return (
     <ErrorBoundary>
       <Layout>

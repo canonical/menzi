@@ -22,6 +22,43 @@ export interface Preview {
   created_at: string;
 }
 
+export type WorkspaceStatus =
+  | 'requested'
+  | 'provisioning'
+  | 'ready'
+  | 'running'
+  | 'idle'
+  | 'archived'
+  | 'deleted';
+
+export interface Workspace {
+  id: string;
+  user_id: string;
+  project_id: string;
+  name: string;
+  status: WorkspaceStatus;
+  instance_name?: string | null;
+  endpoint?: string | null;
+  branch?: string | null;
+  commit_sha?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkspaceSession {
+  id: string;
+  title?: string | null;
+  time?: { created?: number; updated?: number };
+}
+
+export interface PromptOutcome {
+  session_id: string;
+  message_id?: string | null;
+  finish_reason?: string | null;
+  error?: string | null;
+}
+
 export interface EnvResponse<T> {
   success: boolean;
   message: string;
@@ -188,6 +225,8 @@ export interface MessageInfo {
   cost?: number;
   tokens?: Record<string, number>;
   time?: { created?: number; completed?: number };
+  /** Attached to user messages; carries the file changes the turn produced. */
+  summary?: { diffs?: Record<string, unknown>[]; title?: string; body?: string };
 }
 
 export interface OpencodeMessage {

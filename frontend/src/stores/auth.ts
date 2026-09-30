@@ -6,6 +6,7 @@ interface AuthState {
   token: string | null;
   isAuthenticated: boolean;
   login: (token: string, user: User) => void;
+  setUser: (id: string) => void;
   logout: () => void;
 }
 
@@ -17,6 +18,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     localStorage.setItem('menzi_token', token);
     set({ token, user, isAuthenticated: true });
   },
+  setUser: (id) =>
+    set((state) => ({
+      user: { ...(state.user ?? { email: '', name: '' }), id },
+    })),
   logout: () => {
     localStorage.removeItem('menzi_token');
     set({ token: null, user: null, isAuthenticated: false });
