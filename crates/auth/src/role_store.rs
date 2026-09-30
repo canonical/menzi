@@ -10,14 +10,11 @@ pub trait RoleStore: Send + Sync {
     async fn highest_for(&self, user_id: Uuid) -> Option<String>;
     async fn role_in_project(&self, user_id: Uuid, project_id: Uuid) -> Option<Role>;
     async fn is_member(&self, user_id: Uuid, project_id: Uuid) -> bool;
-    async fn org_of(&self, user_id: Uuid) -> Option<Uuid>;
-    async fn set_org(&self, user_id: Uuid, org_id: Uuid) -> Result<(), sqlx::Error>;
 }
 
 #[derive(Default)]
 pub struct InMemoryRoleStore {
     roles: Mutex<HashMap<(Uuid, Uuid), Role>>,
-    orgs: Mutex<HashMap<Uuid, Uuid>>,
 }
 
 impl InMemoryRoleStore {
@@ -32,12 +29,6 @@ impl InMemoryRoleStore {
             .insert((user_id, project_id), role);
     }
 
-    pub fn set_org_for(&self, user_id: Uuid, org_id: Uuid) {
-        self.orgs
-            .lock()
-            .expect("role store lock")
-            .insert(user_id, org_id);
-    }
 }
 
 fn rank(role: &Role) -> u8 {
@@ -77,18 +68,6 @@ impl RoleStore for InMemoryRoleStore {
             .contains_key(&(user_id, project_id))
     }
 
-    async fn org_of(&self, user_id: Uuid) -> Option<Uuid> {
-        self.orgs
-            .lock()
-            .expect("role store lock")
-            .get(&user_id)
-            .copied()
-    }
-
-    async fn set_org(&self, user_id: Uuid, org_id: Uuid) -> Result<(), sqlx::Error> {
-        self.set_org_for(user_id, org_id);
-        Ok(())
-    }
 }
 
 pub struct PostgresRoleStore {
@@ -153,23 +132,6 @@ impl RoleStore for PostgresRoleStore {
         .is_some()
     }
 
-    async fn org_of(&self, user_id: Uuid) -> Option<Uuid> {
-        sqlx::query_scalar::<_, Uuid>("SELECT org_id FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(&self.pool)
-            .await
-            .ok()
-            .flatten()
-    }
-
-    async fn set_org(&self, user_id: Uuid, org_id: Uuid) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE users SET org_id = $2 WHERE id = $1 AND org_id IS NULL")
-            .bind(user_id)
-            .bind(org_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -228,15 +190,15 @@ mod tests {
     }
 
     #[test]
-    fn an_org_is_remembered_per_user() {
+    fn a_role_is_remembered_per_project() {
         let store = InMemoryRoleStore::new();
         let user = Uuid::new_v4();
-        let org = Uuid::new_v4();
-        store.set_org_for(user, org);
+        let project = Uuid::new_v4();
+        store.grant(user, project, Role::Developer);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        assert_eq!(runtime.block_on(store.org_of(user)), Some(org));
-        assert_eq!(runtime.block_on(store.org_of(Uuid::new_v4())), None);
+        assert!(runtime.block_on(store.is_member(user, project)));
+        assert!(!runtime.block_on(store.is_member(Uuid::new_v4(), project)));
     }
 }
