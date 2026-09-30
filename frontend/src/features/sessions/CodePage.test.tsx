@@ -145,7 +145,7 @@ describe('CodePage', () => {
     expect(screen.getByText(S.workspace.sessions.emptyBody)).toBeInTheDocument();
   });
 
-  it('renders a tab per session in this workspace, with chat and review for the active one', async () => {
+  it('renders a tab per session in this workspace, with the chat filling the page', async () => {
     mockApi({
       sessions: [
         { id: SESSION_A, time: { updated: 1790000000000 } },
@@ -161,8 +161,72 @@ describe('CodePage', () => {
       await screen.findByRole('tab', { name: new RegExp(SESSION_B.replace('ses_', '').slice(0, 8)) }),
     ).toBeInTheDocument();
     expect(await screen.findByText('hello agent')).toBeInTheDocument();
-    expect(screen.getByText(S.review.title)).toBeInTheDocument();
     expect(screen.getByLabelText(S.chat.label)).toBeInTheDocument();
+  });
+
+  it('keeps the review panel closed until it is asked for', async () => {
+    mockApi({ sessions: [{ id: SESSION_A, time: { updated: 1790000000000 } }] });
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}`);
+
+    await screen.findByText('hello agent');
+    expect(screen.queryByText(S.review.title)).not.toBeInTheDocument();
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-review', 'closed');
+    expect(screen.getByRole('button', { name: S.code.showReview })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('opens the review panel from the header button and records it in the url', async () => {
+    mockApi({ sessions: [{ id: SESSION_A, time: { updated: 1790000000000 } }] });
+    const user = userEvent.setup();
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}`);
+
+    await screen.findByText('hello agent');
+    await user.click(screen.getByRole('button', { name: S.code.showReview }));
+
+    expect(await screen.findByText(S.review.title)).toBeInTheDocument();
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-review', 'open');
+    expect(screen.getByRole('button', { name: S.code.hideReview })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('opens the review panel straight from a shared link', async () => {
+    mockApi({ sessions: [{ id: SESSION_A, time: { updated: 1790000000000 } }] });
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}&panel=review`);
+
+    expect(await screen.findByText(S.review.title)).toBeInTheDocument();
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-review', 'open');
+  });
+
+  it('closes the review panel again and returns the chat to the full page', async () => {
+    mockApi({ sessions: [{ id: SESSION_A, time: { updated: 1790000000000 } }] });
+    const user = userEvent.setup();
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}&panel=review`);
+
+    await screen.findByText(S.review.title);
+    await user.click(screen.getByRole('button', { name: S.code.hideReview }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(S.review.title)).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-review', 'closed');
+  });
+
+  it('keeps the session when the review panel is toggled', async () => {
+    mockApi({ sessions: [{ id: SESSION_A, time: { updated: 1790000000000 } }] });
+    const user = userEvent.setup();
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}`);
+
+    await screen.findByText('hello agent');
+    await user.click(screen.getByRole('button', { name: S.code.showReview }));
+
+    expect(await screen.findByText('hello agent')).toBeInTheDocument();
+    expect(
+      screen.getByRole('tab', { name: new RegExp(SESSION_A.replace('ses_', '').slice(0, 8)) }),
+    ).toBeInTheDocument();
   });
 
   it('labels a tab with its title when it has one', async () => {
