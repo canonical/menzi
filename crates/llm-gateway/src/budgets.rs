@@ -55,7 +55,7 @@ mod tests {
         manager.set_budget(
             "user-1".to_string(),
             BudgetStatus {
-                    project_id: None,
+                project_id: None,
                 user_id: None,
                 session_id: None,
                 feature: "coding".to_string(),
@@ -72,7 +72,7 @@ mod tests {
         manager.set_budget(
             "user-1".to_string(),
             BudgetStatus {
-                    project_id: None,
+                project_id: None,
                 user_id: None,
                 session_id: None,
                 feature: "coding".to_string(),
@@ -95,7 +95,7 @@ mod tests {
         manager.set_budget(
             "user-1".to_string(),
             BudgetStatus {
-                    project_id: None,
+                project_id: None,
                 user_id: None,
                 session_id: None,
                 feature: "coding".to_string(),

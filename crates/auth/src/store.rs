@@ -626,7 +626,10 @@ mod tests {
     async fn a_user_carries_no_organisation() {
         let store = InMemoryAccountStore::new();
         let user = store.create("a@b", "A", None, false).await.unwrap();
-        assert_eq!(store.find_by_id(user.id).await.unwrap().unwrap().id, user.id);
+        assert_eq!(
+            store.find_by_id(user.id).await.unwrap().unwrap().id,
+            user.id
+        );
     }
 
     #[test]

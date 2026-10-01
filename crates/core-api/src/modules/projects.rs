@@ -33,14 +33,7 @@ pub struct ListProjectsQuery {
 
 const MAX_NAME_LENGTH: usize = 120;
 
-type ProjectRow = (
-    String,
-    String,
-    String,
-    Option<String>,
-    String,
-    String,
-);
+type ProjectRow = (String, String, String, Option<String>, String, String);
 
 fn map_row(row: ProjectRow) -> ProjectResponse {
     ProjectResponse {

@@ -143,10 +143,7 @@ mod tests {
     fn scope_key_uses_project_when_present() {
         let project_id = ProjectId::new();
         let mut headers = HeaderMap::new();
-        headers.insert(
-            HEADER_PROJECT_ID,
-            project_id.to_string().parse().unwrap(),
-        );
+        headers.insert(HEADER_PROJECT_ID, project_id.to_string().parse().unwrap());
         let tenant = TenantContext::from_headers(&headers).unwrap();
         assert_eq!(tenant.scope_key(), format!("project:{project_id}"));
     }

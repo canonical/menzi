@@ -28,7 +28,6 @@ impl InMemoryRoleStore {
             .expect("role store lock")
             .insert((user_id, project_id), role);
     }
-
 }
 
 fn rank(role: &Role) -> u8 {
@@ -67,7 +66,6 @@ impl RoleStore for InMemoryRoleStore {
             .expect("role store lock")
             .contains_key(&(user_id, project_id))
     }
-
 }
 
 pub struct PostgresRoleStore {
@@ -131,7 +129,6 @@ impl RoleStore for PostgresRoleStore {
         .flatten()
         .is_some()
     }
-
 }
 
 #[cfg(test)]
