@@ -10,6 +10,22 @@
 @include vf-p-icon-quote;
 @include vf-p-icon-restart;
 
+// Syntax colours for the diff viewer. Vanilla has no palette for grammar
+// classes, so the four roles the code needs are declared here and kept apart
+// from the framework's tokens. Dark is the default body class when the stored
+// theme resolves to dark, which is what theme.ts toggles.
+// The rule bans hex so the palette stays with the framework's tokens, which
+// means the syntax roles are composed from Vanilla's semantic set rather than
+// from a colour picker. Each role is a different token, so the five stay
+// distinguishable and each one follows the light and dark theme on its own.
+:root {
+  --app-syntax-keyword: var(--vf-color-link-visited);
+  --app-syntax-string: var(--vf-color-positive-text);
+  --app-syntax-number: var(--vf-color-text-muted);
+  --app-syntax-function: var(--vf-color-link-default);
+  --app-syntax-type: var(--vf-color-accent);
+}
+
 .menzi-logo {
   align-items: center;
   display: inline-flex;
@@ -166,6 +182,62 @@
   align-items: center;
   display: flex;
   gap: 0.5rem;
+}
+
+.app-working {
+  align-items: center;
+  color: var(--vf-color-text-muted);
+  display: inline-flex;
+  font-size: 0.8125rem;
+  gap: 0.375rem;
+  white-space: nowrap;
+}
+
+.app-working__dot {
+  animation: app-working-pulse 1.2s ease-in-out infinite;
+  background: var(--vf-color-positive-text);
+  border-radius: 50%;
+  flex: 0 0 0.5rem;
+  height: 0.5rem;
+  width: 0.5rem;
+}
+
+// Each language gets its own key, so a new phrase restarts the entry animation
+// rather than sitting still while the dot keeps pulsing.
+.app-working__text {
+  animation: app-working-fade 0.4s ease-out;
+}
+
+@keyframes app-working-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.75);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes app-working-fade {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-working__dot,
+  .app-working__text {
+    animation: none;
+  }
 }
 
 // The field wrapper is the flex item, so it grows to fill the row. The label is
@@ -513,6 +585,10 @@
   white-space: pre-wrap;
 }
 
+.app-chat-working {
+  margin: 0.5rem 0 0;
+}
+
 // The review workspace: a scrollable list of changed files beside a read-only
 // diff viewer for the selected file.
 .app-review {
@@ -616,6 +692,13 @@
   padding: 0.75rem;
 }
 
+.app-review__base {
+  color: var(--vf-color-text-muted);
+  font-family: var(--vf-font-family-code, monospace);
+  font-size: 0.75rem;
+  margin: 0.5rem 0 0;
+}
+
 .app-review__viewer-header {
   align-items: center;
   display: flex;
@@ -624,6 +707,251 @@
   justify-content: space-between;
   margin-bottom: 0.75rem;
   overflow-wrap: anywhere;
+}
+
+.app-md {
+  overflow-wrap: anywhere;
+
+  > :first-child {
+    margin-top: 0;
+  }
+
+  > :last-child {
+    margin-bottom: 0;
+  }
+
+  p {
+    margin-bottom: 0.75rem;
+    white-space: pre-wrap;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    margin: 1rem 0 0.5rem;
+  }
+
+  ul,
+  ol {
+    margin: 0 0 0.75rem;
+    padding-left: 1.25rem;
+  }
+
+  li {
+    margin-bottom: 0.25rem;
+  }
+
+  blockquote {
+    border-left: 3px solid var(--vf-color-border-low-contrast);
+    color: var(--vf-color-text-muted);
+    margin: 0 0 0.75rem;
+    padding-left: 0.75rem;
+  }
+
+  hr {
+    border: 0;
+    border-top: 1px solid var(--vf-color-border-low-contrast);
+    margin: 1rem 0;
+  }
+
+  table {
+    border-collapse: collapse;
+    margin: 0 0 0.75rem;
+    width: 100%;
+  }
+
+  th,
+  td {
+    border: 1px solid var(--vf-color-border-low-contrast);
+    padding: 0.25rem 0.5rem;
+    text-align: left;
+  }
+
+  a {
+    overflow-wrap: anywhere;
+  }
+}
+
+.app-md__code {
+  background: var(--vf-color-background-alt);
+  border-radius: 0.125rem;
+  font-family: var(--vf-font-family-code, monospace);
+  font-size: 0.875em;
+  padding: 0 0.2em;
+  white-space: break-spaces;
+}
+
+.app-md__pre {
+  background: var(--vf-color-background-code);
+  border: 1px solid var(--vf-color-border-low-contrast);
+  border-radius: 0.125rem;
+  display: block;
+  font-family: var(--vf-font-family-code, monospace);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  margin: 0 0 0.75rem;
+  overflow-x: auto;
+  padding: 0.5rem 0;
+}
+
+.app-md__line {
+  display: block;
+  min-width: max-content;
+  padding: 0 0.75rem;
+  white-space: pre;
+}
+
+.app-tv__row {
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.app-tv__value {
+  font-family: var(--vf-font-family-code, monospace);
+  overflow-wrap: anywhere;
+}
+
+.app-tv__label {
+  color: var(--vf-color-text-muted);
+  font-size: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.app-tv__note {
+  color: var(--vf-color-text-muted);
+  font-size: 0.75rem;
+  margin: 0.25rem 0 0;
+}
+
+.app-tv__list {
+  font-family: var(--vf-font-family-code, monospace);
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.app-tv__diff {
+  border: 1px solid var(--vf-color-border-low-contrast);
+  border-radius: 0.125rem;
+  font-family: var(--vf-font-family-code, monospace);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+.app-tv__diffline {
+  display: flex;
+  white-space: pre;
+}
+
+.app-tv__diffline--add {
+  background: var(--vf-color-background-positive);
+  box-shadow: inset 2px 0 0 var(--vf-color-positive-text);
+}
+
+.app-tv__diffline--remove {
+  background: var(--vf-color-background-negative);
+  box-shadow: inset 2px 0 0 var(--vf-color-negative-text);
+}
+
+.app-tv__diffline--meta {
+  color: var(--vf-color-text-muted);
+}
+
+.app-tv__diffmark {
+  color: var(--vf-color-text-muted);
+  flex: 0 0 1rem;
+  text-align: center;
+  user-select: none;
+}
+
+.app-tv__difftext {
+  flex: 1 1 auto;
+  padding-right: 0.5rem;
+}
+
+.app-tv__difftext span {
+  display: block;
+  min-width: max-content;
+}
+
+.app-tv__diff .hljs-comment,
+.app-tv__diff .hljs-quote {
+  color: var(--vf-color-text-muted);
+  font-style: italic;
+}
+
+.app-tv__diff .hljs-keyword,
+.app-tv__diff .hljs-selector-tag,
+.app-tv__diff .hljs-literal,
+.app-tv__diff .hljs-name,
+.app-tv__diff .hljs-operator {
+  color: var(--app-syntax-keyword);
+}
+
+.app-tv__diff .hljs-string,
+.app-tv__diff .hljs-regexp {
+  color: var(--app-syntax-string);
+}
+
+.app-tv__diff .hljs-number,
+.app-tv__diff .hljs-symbol {
+  color: var(--app-syntax-number);
+}
+
+.app-tv__diff .hljs-title,
+.app-tv__diff .hljs-title.function_,
+.app-tv__diff .hljs-section {
+  color: var(--app-syntax-function);
+}
+
+.app-tv__diff .hljs-type,
+.app-tv__diff .hljs-built_in {
+  color: var(--app-syntax-type);
+}
+
+.app-tv__diff .hljs-meta {
+  color: var(--vf-color-text-muted);
+}
+
+.app-md__pre .hljs-comment,
+.app-md__pre .hljs-quote,
+.app-md__code .hljs-comment {
+  color: var(--vf-color-text-muted);
+  font-style: italic;
+}
+
+.app-md__pre .hljs-keyword,
+.app-md__pre .hljs-literal,
+.app-md__code .hljs-keyword {
+  color: var(--app-syntax-keyword);
+}
+
+.app-md__pre .hljs-string,
+.app-md__pre .hljs-regexp,
+.app-md__code .hljs-string {
+  color: var(--app-syntax-string);
+}
+
+.app-md__pre .hljs-number,
+.app-md__pre .hljs-symbol,
+.app-md__code .hljs-number {
+  color: var(--app-syntax-number);
+}
+
+.app-md__pre .hljs-title,
+.app-md__pre .hljs-title.function_,
+.app-md__code .hljs-title {
+  color: var(--app-syntax-function);
+}
+
+.app-md__pre .hljs-type,
+.app-md__pre .hljs-built_in,
+.app-md__code .hljs-type {
+  color: var(--app-syntax-type);
 }
 
 .app-diff {
@@ -643,27 +971,48 @@
   white-space: pre;
 }
 
-.app-diff__line {
-  display: flex;
+.app-diff__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   font-family: var(--vf-font-family-code, monospace);
   font-size: 0.8125rem;
   line-height: 1.5;
 }
 
-// Vanilla's positive and negative backgrounds are very pale, so a changed line
+.app-diff__cell {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app-diff__cell--left {
+  border-right: 1px solid var(--vf-color-border-low-contrast);
+}
+
+// Vanilla's positive and negative backgrounds are very pale, so a changed cell
 // also gets a bar in the matching text colour. Both tokens are theme aware.
-.app-diff__line--added {
+.app-diff__cell--added {
   background: var(--vf-color-background-positive);
+}
+
+.app-diff__cell--added.app-diff__cell--left {
   box-shadow: inset 2px 0 0 var(--vf-color-positive-text);
 }
 
-.app-diff__line--removed {
+.app-diff__cell--removed {
   background: var(--vf-color-background-negative);
-  box-shadow: inset 2px 0 0 var(--vf-color-negative-text);
 }
 
-.app-diff__line--meta {
+.app-diff__cell--removed.app-diff__cell--right {
+  box-shadow: inset -2px 0 0 var(--vf-color-negative-text);
+}
+
+.app-diff__cell--meta {
   color: var(--vf-color-text-muted);
+}
+
+.app-diff__cell--empty {
+  background: var(--vf-color-background-alt);
 }
 
 .app-diff__gutter {
@@ -675,10 +1024,6 @@
   user-select: none;
 }
 
-.app-diff__gutter--new {
-  border-right-width: 0;
-}
-
 .app-diff__mark {
   color: var(--vf-color-text-muted);
   flex: 0 0 1rem;
@@ -688,8 +1033,85 @@
 
 .app-diff__content {
   flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
   padding-right: 0.75rem;
   white-space: pre;
+}
+
+.app-diff__content span {
+  display: block;
+  min-width: max-content;
+}
+
+// The grammar classes highlight.js emits, mapped onto Vanilla's own palette so
+// the code reads the same way as the rest of the page and follows the theme.
+.app-diff__content .hljs-comment,
+.app-diff__content .hljs-quote {
+  color: var(--vf-color-text-muted);
+  font-style: italic;
+}
+
+.app-diff__content .hljs-keyword,
+.app-diff__content .hljs-selector-tag,
+.app-diff__content .hljs-literal,
+.app-diff__content .hljs-doctag,
+.app-diff__content .hljs-name,
+.app-diff__content .hljs-operator {
+  color: var(--app-syntax-keyword);
+}
+
+.app-diff__content .hljs-string,
+.app-diff__content .hljs-regexp,
+.app-diff__content .hljs-addition,
+.app-diff__content .hljs-meta .hljs-string {
+  color: var(--app-syntax-string);
+}
+
+.app-diff__content .hljs-number,
+.app-diff__content .hljs-symbol,
+.app-diff__content .hljs-bullet,
+.app-diff__content .hljs-link {
+  color: var(--app-syntax-number);
+}
+
+.app-diff__content .hljs-title,
+.app-diff__content .hljs-title.function_,
+.app-diff__content .hljs-title.class_,
+.app-diff__content .hljs-section,
+.app-diff__content .hljs-attribute {
+  color: var(--app-syntax-function);
+}
+
+.app-diff__content .hljs-type,
+.app-diff__content .hljs-built_in,
+.app-diff__content .hljs-class .hljs-title,
+.app-diff__content .hljs-params {
+  color: var(--app-syntax-type);
+}
+
+.app-diff__content .hljs-meta,
+.app-diff__content .hljs-tag {
+  color: var(--vf-color-text-muted);
+}
+
+.app-diff__content .hljs-attr,
+.app-diff__content .hljs-variable,
+.app-diff__content .hljs-template-variable,
+.app-diff__content .hljs-subst {
+  color: var(--vf-color-text-default);
+}
+
+.app-diff__content .hljs-deletion {
+  color: var(--vf-color-negative-text);
+}
+
+.app-diff__content .hljs-emphasis {
+  font-style: italic;
+}
+
+.app-diff__content .hljs-strong {
+  font-weight: 700;
 }
 
 .app-navigation-selector {
