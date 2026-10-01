@@ -1,17 +1,9 @@
 import { useState } from 'react';
 import { Button, Icon } from '@canonical/react-components';
 import { describeToolCall, toolLine, toolPhrase } from '../../../lib/chat/describeToolCall';
-import {
-  describeResult,
-  hasDetail,
-  normaliseToolState,
-  toolInputText,
-  toolNameOf,
-} from '../../../lib/chat/normalise';
+import { hasDetail, normaliseToolState, toolNameOf } from '../../../lib/chat/normalise';
+import { toolDetail } from './ToolDetailView';
 import type { ToolPart, ToolState } from '../../../lib/types';
-import { S } from '../../../strings/catalogue';
-
-const PREVIEW_LIMIT = 600;
 
 function iconFor(state: ToolState): { name: string; modifier: string } {
   switch (state.status) {
@@ -27,19 +19,14 @@ function iconFor(state: ToolState): { name: string; modifier: string } {
 
 export function ToolCallStep({ part }: { part: ToolPart }) {
   const [open, setOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
   const state = normaliseToolState(part);
   const detail = hasDetail(state);
   const tool = toolNameOf(part);
   const line = toolLine(tool, state);
-  const result = describeResult(state);
-  const input = toolInputText(state);
-  const body = result || input;
-  const truncated = body.length > PREVIEW_LIMIT;
-  const shown = expanded || !truncated ? body : `${body.slice(0, PREVIEW_LIMIT)}...`;
   const icon = iconFor(state);
   const error = state.status === 'error' ? state.error : '';
   const meta = error || line.meta;
+  const view = open && detail ? toolDetail(tool, state) : null;
 
   const row = (
     <>
@@ -78,36 +65,16 @@ export function ToolCallStep({ part }: { part: ToolPart }) {
         <div className="app-tc__row">{row}</div>
       )}
 
-      {detail && open ? (
+      {view ? (
         <div className="app-tc__detail">
           <span className="app-tc__tool-tag">{tool}</span>
-          {input ? (
-            <div className="app-tc__section">
-              <div className="app-tc__section-label">{S.chatSteps.input}</div>
-              <pre className="app-tc__data">{input}</pre>
+          {view.sections.map((section) => (
+            <div className="app-tc__section" key={section.label}>
+              <div className="app-tc__section-label">{section.label}</div>
+              {section.body}
             </div>
-          ) : null}
-          {state.status === 'completed' ? (
-            <div className="app-tc__section">
-              <div className="app-tc__section-label">{S.chatSteps.result}</div>
-              {result ? (
-                <>
-                  <pre className="app-tc__data">{shown}</pre>
-                  {truncated ? (
-                    <Button
-                      appearance="link"
-                      className="app-tc__more"
-                      onClick={() => setExpanded((value) => !value)}
-                    >
-                      {expanded ? S.chatSteps.showLess : S.chatSteps.showMore}
-                    </Button>
-                  ) : null}
-                </>
-              ) : (
-                <p className="app-tc__data app-tc__data--empty">{S.chatSteps.noResult}</p>
-              )}
-            </div>
-          ) : null}
+          ))}
+          {view.note ? <p className="app-tv__note">{view.note}</p> : null}
           {error ? <p className="app-tc__error">{error}</p> : null}
         </div>
       ) : null}

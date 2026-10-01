@@ -103,7 +103,7 @@ describe('ToolCallStep', () => {
     expect(textOf('.app-tc__label')).toBe('Matching files');
   });
 
-  it('exposes aria-expanded and reveals input and output when interactive', async () => {
+  it('exposes aria-expanded and reveals a tailored view when interactive', async () => {
     const user = userEvent.setup();
     render(<ToolCallStep part={completed} />);
     const button = screen.getByRole('button');
@@ -112,10 +112,11 @@ describe('ToolCallStep', () => {
     await user.click(button);
 
     expect(button).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByText('Input')).toBeInTheDocument();
-    expect(screen.getByText('Result')).toBeInTheDocument();
+    expect(screen.getByText('File')).toBeInTheDocument();
+    expect(screen.getByText('Contents')).toBeInTheDocument();
     expect(within(detailOf()).getByText(/src\/main\.rs/)).toBeInTheDocument();
-    expect(screen.getByText('fn main() {}')).toBeInTheDocument();
+    expect(detailOf().textContent).toContain('fn main() {}');
+    expect(detailOf().textContent).not.toContain('"filePath"');
   });
 
   it('shows the tool name and the captured output for a bash call', async () => {
@@ -138,19 +139,23 @@ describe('ToolCallStep', () => {
     expect(within(detailOf()).getByText('command not found')).toBeInTheDocument();
   });
 
-  it('truncates a long result and offers to expand it', async () => {
+  it('shows only the first lines of a very long output', async () => {
     const user = userEvent.setup();
     const long: ToolPart = {
       type: 'tool',
       id: 't6',
       tool: 'bash',
-      state: { status: 'completed', input: {}, output: 'x'.repeat(1200) },
+      state: {
+        status: 'completed',
+        input: { command: 'seq 1 500' },
+        output: Array.from({ length: 500 }, (_, index) => `line ${index}`).join('\n'),
+      },
     };
     render(<ToolCallStep part={long} />);
     await user.click(screen.getByRole('button'));
-    expect(screen.getByText('Show more')).toBeInTheDocument();
-    await user.click(screen.getByText('Show more'));
-    expect(screen.getByText('Show less')).toBeInTheDocument();
+
+    expect(detailOf().textContent).toContain('Showing 200 of 500 lines.');
+    expect(detailOf().textContent).not.toContain('line 499');
   });
 
   it('has no accessibility violations', async () => {
