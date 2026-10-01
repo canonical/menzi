@@ -18,34 +18,46 @@ export function Composer({ sessionId, disabled }: ComposerProps) {
   const queryClient = useQueryClient();
   const notify = useNotify();
 
-  const modelsQuery = useQuery({ queryKey: queryKeys.opencode.models(), queryFn: listModels, retry: false });
-  const agentsQuery = useQuery({ queryKey: queryKeys.opencode.agents(), queryFn: listAgents, retry: false });
+  const modelsQuery = useQuery({
+    queryKey: queryKeys.opencode.models(sessionId),
+    queryFn: () => listModels(sessionId),
+    retry: false,
+  });
+  const agentsQuery = useQuery({
+    queryKey: queryKeys.opencode.agents(sessionId),
+    queryFn: () => listAgents(sessionId),
+    retry: false,
+  });
 
   const models = modelsQuery.data ?? [];
   const agents = agentsQuery.data ?? [];
 
   const promptMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (message: string) =>
       sendPrompt({
         sessionId,
-        text: text.trim(),
+        text: message,
         modelId: modelId || undefined,
         agent: agent || undefined,
       }),
     onSuccess: () => {
-      setText('');
       queryClient.invalidateQueries({ queryKey: queryKeys.opencode.messages(sessionId) });
       // The review list comes from the message summaries and each patch is
       // cached per message, so clear every diff entry for this session.
       queryClient.invalidateQueries({ queryKey: queryKeys.opencode.diffs(sessionId) });
     },
-    onError: (error) => notify.failure(S.chat.sendFailed, error, getErrorMessage(error)),
+    onError: (error, message) => {
+      setText(message);
+      notify.failure(S.chat.sendFailed, error, getErrorMessage(error));
+    },
   });
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!text.trim() || promptMutation.isPending) return;
-    promptMutation.mutate();
+    const message = text.trim();
+    if (!message || promptMutation.isPending) return;
+    setText('');
+    promptMutation.mutate(message);
   };
 
   const modelValue =
