@@ -85,6 +85,55 @@ describe('api client', () => {
     expect(options.headers.get('x-menzi-csrf')).toBeNull()
   })
 
+  it('never sends an authorization header on a control plane path', async () => {
+    localStorage.setItem('menzi_token', 'token-123')
+    setCookie('menzi_csrf', 'csrf-value')
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    await http.get('/api/projects')
+    const [, options] = fetchMock.mock.calls[0]
+    expect(options.headers.get('Authorization')).toBeNull()
+  })
+
+  it.each([
+    ['get', '/session/ses_1/message'],
+    ['post', '/session/ses_1/message'],
+    ['post', '/session/ses_1/interrupt'],
+    ['get', '/session/ses_1/diff'],
+    ['get', '/api/session/ses_1/diff'],
+  ])('sends the session credential on a guarded %s of %s', async (method, path) => {
+    setCookie('menzi_csrf', 'csrf-value')
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    if (method === 'post') await http.post(path, {})
+    else await http.get(path)
+    const [, options] = fetchMock.mock.calls[0]
+    expect(options.headers.get('Authorization')).toBe('Bearer csrf-value')
+  })
+
+  it('falls back to a placeholder credential when no session cookie exists', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    await http.get('/session/ses_1/message')
+    const [, options] = fetchMock.mock.calls[0]
+    expect(options.headers.get('Authorization')).toMatch(/^Bearer .+/)
+  })
+
+  it.each([
+    '/api/projects',
+    '/api/event',
+    '/api/model',
+    '/health',
+    '/session',
+  ])('leaves %s unguarded', async (path) => {
+    setCookie('menzi_csrf', 'csrf-value')
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    await http.get(path)
+    const [, options] = fetchMock.mock.calls[0]
+    expect(options.headers.get('Authorization')).toBeNull()
+  })
+
   it('throws ApiError with parsed message when response is not ok', async () => {
     vi.stubGlobal(
       'fetch',

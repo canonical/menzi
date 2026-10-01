@@ -49,6 +49,7 @@ export interface Workspace {
 export interface WorkspaceSession {
   id: string;
   title?: string | null;
+  directory?: string | null;
   time?: { created?: number; updated?: number };
 }
 

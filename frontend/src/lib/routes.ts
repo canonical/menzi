@@ -86,6 +86,8 @@ export const apiPaths = {
       `/api/v1/workspaces/${userId}/${projectId}/interrupt`,
     terminal: (userId: string, projectId: string) =>
       `/api/v1/workspaces/${userId}/${projectId}/terminal`,
+    diff: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}/diff`,
     forProject: (projectId: string) => `/api/v1/projects/${projectId}/workspaces`,
   },
   env: {
@@ -122,6 +124,10 @@ export const queryKeys = {
     detail: (userId: string, projectId: string) =>
       ['workspaces', userId, projectId] as const,
     forProject: (projectId: string) => ['workspaces', 'project', projectId] as const,
+    diff: (userId: string, projectId: string, directory: string) =>
+      ['workspaces', 'diff', userId, projectId, directory] as const,
+    diffPatch: (userId: string, projectId: string, directory: string, path: string) =>
+      ['workspaces', 'diff', userId, projectId, directory, path] as const,
   },
   env: {
     specs: () => ['env', 'specs'] as const,
@@ -138,8 +144,8 @@ export const queryKeys = {
     workspaceSessions: (userId: string, projectId: string) =>
       ['opencode', 'workspace-sessions', userId, projectId] as const,
     messages: (sessionId: string) => ['opencode', 'messages', sessionId] as const,
-    models: () => ['opencode', 'models'] as const,
-    agents: () => ['opencode', 'agents'] as const,
+    models: (sessionId: string) => ['opencode', 'models', sessionId] as const,
+    agents: (sessionId: string) => ['opencode', 'agents', sessionId] as const,
     /** One entry per patch request. Invalidate with `diffs` to clear them all. */
     diff: (sessionId: string, messageId?: string) =>
       ['opencode', 'diff', sessionId, messageId ?? null] as const,

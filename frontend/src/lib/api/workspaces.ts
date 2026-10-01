@@ -119,6 +119,42 @@ export async function interruptWorkspaceSession(
   await http.post(apiPaths.workspaces.interrupt(userId, projectId), {});
 }
 
+export interface TreeChange {
+  file: string;
+  previous: string | null;
+  additions: number;
+  deletions: number;
+  status: string;
+  binary: boolean;
+  truncated: boolean;
+  patch: string;
+}
+
+export interface TreeDiff {
+  head: string;
+  changes: TreeChange[];
+}
+
+export async function workspaceTreeChanges(
+  userId: string,
+  projectId: string,
+  directory?: string,
+): Promise<TreeDiff> {
+  const query = directory ? `?directory=${encodeURIComponent(directory)}` : '';
+  return http.get<TreeDiff>(`${apiPaths.workspaces.diff(userId, projectId)}${query}`);
+}
+
+export async function workspaceFilePatch(
+  userId: string,
+  projectId: string,
+  directory: string | undefined,
+  path: string,
+): Promise<TreeDiff> {
+  const query = new URLSearchParams({ path });
+  if (directory) query.set('directory', directory);
+  return http.get<TreeDiff>(`${apiPaths.workspaces.diff(userId, projectId)}?${query.toString()}`);
+}
+
 export async function runWorkspaceCommand(
   userId: string,
   projectId: string,

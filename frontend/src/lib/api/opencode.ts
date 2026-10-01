@@ -21,14 +21,20 @@ export async function listSessions(): Promise<OpencodeSession[]> {
   return response;
 }
 
-export async function listAgents(): Promise<OpencodeAgent[]> {
-  const response = await http.get<OpencodeAgent[]>('/agent');
+export async function listAgents(sessionId?: string): Promise<OpencodeAgent[]> {
+  const query = sessionQuery(sessionId);
+  const response = await http.get<OpencodeAgent[]>('/agent' + query);
   return response;
 }
 
-export async function listModels(): Promise<OpencodeModel[]> {
-  const response = await http.get<DataEnvelope<OpencodeModel[]>>('/api/model');
+export async function listModels(sessionId?: string): Promise<OpencodeModel[]> {
+  const query = sessionQuery(sessionId);
+  const response = await http.get<DataEnvelope<OpencodeModel[]>>('/api/model' + query);
   return response.data.filter((model) => model.status !== 'deprecated');
+}
+
+function sessionQuery(sessionId?: string): string {
+  return sessionId ? `?session=${encodeURIComponent(sessionId)}` : '';
 }
 
 export async function listMessages(
@@ -59,42 +65,6 @@ export async function sendPrompt(input: {
 
 export async function interruptSession(sessionId: string): Promise<void> {
   await http.post(`/session/${sessionId}/interrupt`, {});
-}
-
-export interface FileDiff {
-  file: string;
-  additions: number;
-  deletions: number;
-  status?: string;
-  /** The unified diff for the file, in the format `git diff` produces. */
-  patch: string;
-}
-
-/**
- * The changes a session made. `messageID` narrows it to a single turn, which
- * is how a file that is missing its patch gets one: the session level response
- * is only the union of the per turn diffs.
- */
-export async function getSessionDiff(sessionId: string, messageId?: string): Promise<FileDiff[]> {
-  const query = messageId ? `?messageID=${encodeURIComponent(messageId)}` : '';
-  const response = await http.get<Record<string, unknown>[]>(
-    `/session/${sessionId}/diff${query}`,
-  );
-  return response.map(normaliseDiff);
-}
-
-function count(value: unknown): number {
-  return typeof value === 'number' ? value : 0;
-}
-
-function normaliseDiff(raw: Record<string, unknown>): FileDiff {
-  return {
-    file: String(raw.file ?? raw.path ?? ''),
-    additions: count(raw.additions),
-    deletions: count(raw.deletions),
-    status: typeof raw.status === 'string' ? raw.status : undefined,
-    patch: typeof raw.patch === 'string' ? raw.patch : '',
-  };
 }
 
 export function eventStreamUrl(): string {

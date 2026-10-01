@@ -9,6 +9,8 @@ const CSRF_HEADER = 'x-menzi-csrf';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+const DEV_SESSION_CREDENTIAL = 'menzi-dev-session';
+
 interface ApiErrorBody {
   error?: { message?: string; code?: string } | string;
   message?: string;
@@ -42,6 +44,19 @@ async function parseError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, message, code);
 }
 
+function sessionCredential(): string {
+  if (typeof document === 'undefined') return DEV_SESSION_CREDENTIAL;
+  return readCookie(CSRF_COOKIE) ?? DEV_SESSION_CREDENTIAL;
+}
+
+const API = 'api';
+const SESSION = 'session';
+const PROXY_PREFIXES = [`/${SESSION}/`, `/${API}/${SESSION}/`];
+
+function goesToSessionProxy(path: string): boolean {
+  return PROXY_PREFIXES.some((prefix) => path.startsWith(prefix) && path.length > prefix.length);
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = options.method ?? 'GET';
   const headers = new Headers(options.headers);
@@ -50,6 +65,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!SAFE_METHODS.has(method.toUpperCase())) {
     const csrf = readCookie(CSRF_COOKIE);
     if (csrf) headers.set(CSRF_HEADER, csrf);
+  }
+
+  if (goesToSessionProxy(path)) {
+    headers.set('Authorization', `Bearer ${sessionCredential()}`);
   }
 
   const response = await fetch(`${BASE_URL}${path}`, {
