@@ -147,21 +147,24 @@ if [ "${MENZI_SKIP_OPENCODE:-0}" != "1" ]; then
     PIDS+=("$!")
     wait_http "http://127.0.0.1:$STUB_MODEL_PORT/v1/models" "stub model" 30 200
   fi
-  if [ "${MENZI_OPENCODE_HOST_OPENCODE:-0}" = "1" ] && command -v opencode >/dev/null 2>&1; then
-    if [ "${MENZI_OPENCODE_CONFIG:-overwrite}" = "overwrite" ] || [ ! -f "$HOME/.config/opencode/opencode.json" ]; then
-      mkdir -p "$HOME/.config/opencode"
-      cp "$ROOT/infra/local/opencode.json" "$HOME/.config/opencode/opencode.json"
-    fi
-    setsid env MENZI_OPENCODE_CONFIG_DIR="$HOME/.config/opencode" \
-      opencode serve --port "$OPENCODE_PORT" --hostname 127.0.0.1 \
-      >"$LOG_DIR/opencode.log" 2>&1 &
-    PIDS+=("$!")
-    OPENCODE_URL="http://127.0.0.1:$OPENCODE_PORT"
-    wait_http "$OPENCODE_URL/api/model" "opencode" 60 200
-  else
-    OPENCODE_URL="${MENZI_OPENCODE_URL:-http://10.10.10.251:4096}"
-    wait_http "$OPENCODE_URL/api/model" "opencode in lxd" 60 200
+fi
+
+# There is no shared opencode in the stack any more. Every session is answered by
+# the opencode inside its own workspace container, and the proxy finds it through
+# the workspace service, so an unknown session is a miss rather than a fallback.
+# The opt-in host opencode stays for working without LXD at all.
+SHARED_OPENCODE=""
+if [ "${MENZI_OPENCODE_HOST_OPENCODE:-0}" = "1" ] && command -v opencode >/dev/null 2>&1; then
+  if [ "${MENZI_OPENCODE_CONFIG:-overwrite}" = "overwrite" ] || [ ! -f "$HOME/.config/opencode/opencode.json" ]; then
+    mkdir -p "$HOME/.config/opencode"
+    cp "$ROOT/infra/local/opencode.json" "$HOME/.config/opencode/opencode.json"
   fi
+  setsid env MENZI_OPENCODE_CONFIG_DIR="$HOME/.config/opencode" \
+    opencode serve --port "$OPENCODE_PORT" --hostname 127.0.0.1 \
+    >"$LOG_DIR/opencode.log" 2>&1 &
+  PIDS+=("$!")
+  SHARED_OPENCODE="http://127.0.0.1:$OPENCODE_PORT"
+  wait_http "$SHARED_OPENCODE/api/model" "host opencode" 60 200
 fi
 
 wait_http "http://${API_BIND/0.0.0.0/$WAIT_HOST}/health" "control plane" 60 200
@@ -171,13 +174,13 @@ wait_http "http://${WORKSPACE_BIND/0.0.0.0/$WAIT_HOST}/api/v1/workspaces" "works
 wait_http "http://${PROXY_BIND/0.0.0.0/$WAIT_HOST}/health" "session proxy" 60 200
 wait_http "http://${LLM_BIND/0.0.0.0/$WAIT_HOST}/v1/models" "llm gateway" 60 200
 
-if [ -n "${OPENCODE_URL:-}" ]; then
+if [ -n "$SHARED_OPENCODE" ]; then
   if curl -s -f -X POST "http://${PROXY_BIND/0.0.0.0/$WAIT_HOST}/api/opencode/register" \
     -H 'content-type: application/json' --max-time 5 \
-    -d "{\"url\":\"$OPENCODE_URL\"}" >/dev/null 2>&1; then
-    echo "opencode registered with session proxy"
+    -d "{\"url\":\"$SHARED_OPENCODE\"}" >/dev/null 2>&1; then
+    echo "host opencode registered with session proxy"
   else
-    echo "warning: opencode registration failed; the proxy keeps its default target" >&2
+    echo "warning: host opencode registration failed" >&2
   fi
 fi
 
@@ -200,7 +203,9 @@ printf '  previews        http://%s\n' "${PREVIEWS_BIND/0.0.0.0/$DISPLAY_HOST}"
 printf '  workspaces      http://%s\n' "${WORKSPACE_BIND/0.0.0.0/$DISPLAY_HOST}"
 printf '  session proxy   http://%s\n' "${PROXY_BIND/0.0.0.0/$DISPLAY_HOST}"
 printf '  llm gateway     http://%s\n' "${LLM_BIND/0.0.0.0/$DISPLAY_HOST}"
-printf '  opencode        %s\n' "${OPENCODE_URL:-skipped}"
+if [ -n "$SHARED_OPENCODE" ]; then
+  printf '  host opencode   %s\n' "$SHARED_OPENCODE"
+fi
 printf '  frontend        http://%s:%s\n' "$DISPLAY_HOST" "$VITE_PORT"
 printf '  logs            %s\n' "$LOG_DIR"
 
