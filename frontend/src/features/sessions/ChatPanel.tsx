@@ -14,11 +14,14 @@ import {
   isToolPart,
 } from '../../lib/chat/normalise';
 import { useSessionStream } from '../../lib/chat/useSessionStream';
+import { isWorking } from '../../lib/chat/isWorking';
 import type { MessageInfo, MessagePart } from '../../lib/types';
 import { groupableRuns } from '../../lib/chat/groupRuns';
 import { ToolCallGroup } from './chat/ToolCallGroup';
 import { ToolCallStep } from './chat/ToolCallStep';
 import { CompactionMarker, ThinkingBlock } from './chat/ThinkingBlock';
+import { WorkingLabel } from './WorkingLabel';
+import { Markdown } from './Markdown';
 import { S } from '../../strings/catalogue';
 
 function errorText(info: MessageInfo): string {
@@ -51,11 +54,7 @@ function MessageParts({ parts }: { parts: MessagePart[] }) {
 
         if (isTextPart(part)) {
           if (!part.text.trim()) return null;
-          return (
-            <p className="app-chat-turn__body" key={key}>
-              {part.text}
-            </p>
-          );
+          return <Markdown key={key} text={part.text} />;
         }
 
         if (isReasoningPart(part)) return <ThinkingBlock key={key} part={part} />;
@@ -82,6 +81,8 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
   const visible = (messagesQuery.data?.messages ?? []).filter(
     (message) => message.info.role === 'user' || message.info.role === 'assistant',
   );
+
+  const working = isWorking(messagesQuery.data?.messages ?? []);
 
   // Streamed parts grow the transcript without changing this component's props,
   // so follow the bottom after every render rather than on a message count.
@@ -133,6 +134,11 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
               );
             })}
           </ul>
+          {working ? (
+            <div className="app-chat-working">
+              <WorkingLabel />
+            </div>
+          ) : null}
         </DataState>
       </div>
       {stuck ? null : (

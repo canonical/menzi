@@ -94,15 +94,15 @@ describe('ChatPanel parts', () => {
 
     const order = Array.from(
       container.querySelectorAll(
-        'li[data-testid="msg-assistant"] .app-chat-turn__body, li[data-testid="msg-assistant"] .app-tc, li[data-testid="msg-assistant"] .app-thinking',
+        'li[data-testid="msg-assistant"] .app-md, li[data-testid="msg-assistant"] .app-tc, li[data-testid="msg-assistant"] .app-thinking',
       ),
     ).map((node) => node.className.split(' ')[0]);
 
     expect(order).toEqual([
-      'app-chat-turn__body',
+      'app-md',
       'app-tc',
       'app-thinking',
-      'app-chat-turn__body',
+      'app-md',
     ]);
   });
 
@@ -111,7 +111,7 @@ describe('ChatPanel parts', () => {
     const { container } = renderPanel();
     await screen.findByText('Here is what I found.');
     const assistant = container.querySelector('li[data-testid="msg-assistant"]');
-    expect(assistant?.querySelectorAll('.app-chat-turn__body')).toHaveLength(2);
+    expect(assistant?.querySelectorAll('.app-md')).toHaveLength(2);
   });
 
   it('heads only the user messages', async () => {
