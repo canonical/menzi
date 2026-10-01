@@ -60,6 +60,7 @@ export function CodePage() {
   const sessions = sessionsQuery.data ?? [];
   const known = sessions.some((session) => session.id === requested);
   const active = requested && (known || SESSION_ID_PATTERN.test(requested)) ? requested : '';
+  const activeDirectory = sessions.find((session) => session.id === active)?.directory ?? undefined;
 
   const openSession = useCallback(
     (sessionId: string) => {
@@ -169,7 +170,11 @@ export function CodePage() {
               </div>
               {reviewOpen ? (
                 <div className="app-code__review" id="code-review-panel">
-                  <CodeReviewPanel sessionId={active} />
+                  <CodeReviewPanel
+                  directory={activeDirectory}
+                  userId={userId}
+                  projectId={projectId}
+                />
                 </div>
               ) : null}
             </div>

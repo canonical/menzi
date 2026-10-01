@@ -338,6 +338,7 @@ export const S = {
     placeholder: 'Ask the agent to change the code',
     send: 'Send',
     sending: 'Sending',
+    working: 'The agent is working.',
     sendFailed: 'The prompt could not be sent.',
     you: 'You',
     emptyTitle: 'No messages yet',
@@ -353,6 +354,9 @@ export const S = {
     noPatch: 'No textual diff is available for this file.',
     filesLabel: 'Changed files',
     repositoryRoot: 'Repository root',
+    againstHead: 'Compared with {head}',
+    patchTruncated: 'This patch is too large to show in full.',
+    binaryFile: 'This file is binary, so there is no textual diff.',
     unknown: 'unknown',
     columns: {
       file: 'File',

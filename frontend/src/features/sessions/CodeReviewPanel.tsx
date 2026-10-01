@@ -2,143 +2,172 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Chip } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
-import { getSessionDiff, listMessages } from '../../lib/api/opencode';
+import { workspaceFilePatch, workspaceTreeChanges, type TreeDiff } from '../../lib/api/workspaces';
 import { getErrorMessage } from '../../lib/api/errors';
 import { queryKeys } from '../../lib/routes';
-import { needsPatch, reviewDiffs, type ReviewDiff } from '../../lib/diff/session';
 import { DiffViewer } from './DiffViewer';
 import { S } from '../../strings/catalogue';
 
 const STATUS_APPEARANCE: Record<string, 'caution' | 'information' | 'negative' | 'positive'> = {
   added: 'positive',
-  modified: 'caution',
+  copied: 'information',
   deleted: 'negative',
+  modified: 'caution',
   renamed: 'information',
+  untracked: 'positive',
 };
 
-export function CodeReviewPanel({ sessionId }: { sessionId: string }) {
+export function CodeReviewPanel({
+  directory,
+  userId,
+  projectId,
+}: {
+  directory?: string;
+  userId?: string;
+  projectId?: string;
+}) {
   const [selected, setSelected] = useState<string | null>(null);
 
-  // The same query the chat uses, so the panel adds no request of its own.
-  const messagesQuery = useQuery({
-    queryKey: queryKeys.opencode.messages(sessionId),
-    queryFn: () => listMessages(sessionId),
+  const enabled = !!userId && !!projectId;
+  const listQuery = useQuery({
+    queryKey: queryKeys.workspaces.diff(userId ?? '', projectId ?? '', directory ?? ''),
+    queryFn: () => workspaceTreeChanges(userId as string, projectId as string, directory),
+    enabled,
     retry: false,
+    refetchInterval: 15000,
   });
 
-  const diffs = reviewDiffs(messagesQuery.data?.messages ?? []);
-  const active = diffs.find((diff) => diff.file === selected) ?? diffs[0] ?? null;
-  const needsLoading = active ? needsPatch(active) : false;
+  const changes = Array.isArray(listQuery.data?.changes) ? listQuery.data!.changes : [];
+  const active = changes.find((change) => change.file === selected) ?? changes[0] ?? null;
 
-  // A summary reports the counts but often not the patch, so fetch it for the
-  // file on screen. Scoping the request to its message is the only way to get it.
   const patchQuery = useQuery({
-    queryKey: queryKeys.opencode.diff(sessionId, active?.messageID),
-    queryFn: () => getSessionDiff(sessionId, active?.messageID),
-    enabled: needsLoading && !!active?.messageID,
+    queryKey: queryKeys.workspaces.diffPatch(
+      userId ?? '',
+      projectId ?? '',
+      directory ?? '',
+      active?.file ?? '',
+    ),
+    queryFn: () =>
+      workspaceFilePatch(
+        userId as string,
+        projectId as string,
+        directory,
+        active?.file ?? '',
+      ),
+    enabled: enabled && !!active,
     retry: false,
   });
 
-  const patch =
-    patchQuery.data?.find((entry) => entry.file === active?.file)?.patch ?? active?.patch ?? '';
-  const loading =
-    messagesQuery.isLoading || (needsLoading && patchQuery.isLoading && !patchQuery.error);
+  const change = patchQuery.data?.changes.find((entry) => entry.file === active?.file) ?? active;
+  const patch = change?.patch ?? '';
+  const head = listQuery.data?.head ?? patchQuery.data?.head ?? '';
 
   return (
     <section className="app-review">
       <h2 className="app-panel-heading">{S.review.title}</h2>
 
       <DataState
-        loading={loading}
-        error={messagesQuery.error ? getErrorMessage(messagesQuery.error) : null}
-        empty={!messagesQuery.isLoading && !messagesQuery.error && diffs.length === 0}
+        loading={listQuery.isLoading}
+        error={listQuery.error ? getErrorMessage(listQuery.error) : null}
+        empty={!listQuery.isLoading && !listQuery.error && changes.length === 0}
         emptyIcon="file-blank"
         emptyTitle={S.review.emptyTitle}
         emptyBody={S.review.emptyBody}
-        onRetry={() => messagesQuery.refetch()}
+        onRetry={() => listQuery.refetch()}
       >
         <div className="app-review__panes">
           <ul className="app-review__files" aria-label={S.review.filesLabel}>
-            {diffs.map((diff) => (
+            {changes.map((entry) => (
               <FileRow
-                key={diff.file}
-                diff={diff}
-                active={diff.file === active?.file}
-                onSelect={() => setSelected(diff.file)}
+                key={entry.file}
+                file={entry.file}
+                additions={entry.additions}
+                deletions={entry.deletions}
+                status={entry.status}
+                active={entry.file === active?.file}
+                onSelect={() => setSelected(entry.file)}
               />
             ))}
           </ul>
 
           <div className="app-review__viewer">
-            {patchQuery.error ? (
-              <p className="u-no-margin--bottom" data-testid="review-diff-error">
-                {getErrorMessage(patchQuery.error)}
-              </p>
-            ) : active && patch ? (
+            {change && patch ? (
               <>
                 <div className="app-review__viewer-header">
-                  <h3 className="p-heading--5 u-no-margin--bottom">{active.file}</h3>
+                  <h3 className="p-heading--5 u-no-margin--bottom">{change.file}</h3>
                   <Chip
-                    value={`+${active.additions} -${active.deletions}`}
-                    appearance={active.additions > 0 ? 'positive' : 'information'}
+                    value={`+${change.additions} -${change.deletions}`}
+                    appearance={change.additions > 0 ? 'positive' : 'information'}
                     isReadOnly
                     isDense
                   />
                 </div>
-                <DiffViewer file={active.file} patch={patch} />
+                {change.truncated ? (
+                  <p className="p-form-validation__message">{S.review.patchTruncated}</p>
+                ) : null}
+                <DiffViewer file={change.file} patch={patch} />
               </>
+            ) : change?.binary ? (
+              <p className="u-no-margin--bottom">{S.review.binaryFile}</p>
             ) : (
               <p className="u-no-margin--bottom">{S.review.noPatch}</p>
             )}
           </div>
         </div>
+        <p className="app-review__base" data-testid="review-base">
+          {head ? S.review.againstHead.replace('{head}', head.slice(0, 12)) : ''}
+        </p>
       </DataState>
     </section>
   );
 }
 
 function FileRow({
-  diff,
+  file,
+  additions,
+  deletions,
+  status,
   active,
   onSelect,
 }: {
-  diff: ReviewDiff;
+  file: string;
+  additions: number;
+  deletions: number;
+  status: string;
   active: boolean;
   onSelect: () => void;
 }) {
-  const slash = diff.file.lastIndexOf('/');
-  const base = slash === -1 ? diff.file : diff.file.slice(slash + 1);
-  const directory = slash === -1 ? '' : diff.file.slice(0, slash);
+  const slash = file.lastIndexOf('/');
+  const base = slash === -1 ? file : file.slice(slash + 1);
+  const directory = slash === -1 ? '' : file.slice(0, slash);
 
   return (
     <li>
       <Button
         className="app-review__file"
-        // The row shows the file name split across two lines and truncated, so
-        // name the button with the whole path.
-        aria-label={diff.file}
+        aria-label={file}
         aria-current={active ? 'true' : undefined}
         onClick={onSelect}
       >
         <span className="app-review__file-row">
           <span className="app-review__file-base">{base}</span>
           <span className="app-review__file-counts">
-            <span className="app-review__count app-review__count--added">+{diff.additions}</span>
-            <span className="app-review__count app-review__count--removed">-{diff.deletions}</span>
+            <span className="app-review__count app-review__count--added">+{additions}</span>
+            <span className="app-review__count app-review__count--removed">-{deletions}</span>
           </span>
         </span>
         <span className="app-review__file-row">
           <span className="app-review__file-dir">{directory || S.review.repositoryRoot}</span>
-          {diff.status ? (
-            <Chip
-              value={diff.status}
-              appearance={STATUS_APPEARANCE[diff.status] ?? 'information'}
-              isReadOnly
-              isDense
-            />
-          ) : null}
+          <Chip
+            value={status}
+            appearance={STATUS_APPEARANCE[status] ?? 'information'}
+            isReadOnly
+            isDense
+          />
         </span>
       </Button>
     </li>
   );
 }
+
+export type { TreeDiff };

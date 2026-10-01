@@ -1,212 +1,193 @@
-import { render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodeReviewPanel } from './CodeReviewPanel';
 import { S } from '../../strings/catalogue';
 
-const SESSION = 'ses_abc123';
+const USER = 'user-1';
+const PROJECT = 'project-1';
+const DIRECTORY = '/workspace';
+const HEAD = 'abc123def456abc123def456abc123def456abcd';
 
-const MAIN_PATCH = `diff --git a/src/main.rs b/src/main.rs
-index 1234567..89abcde 100644
---- a/src/main.rs
-+++ b/src/main.rs
-@@ -1,4 +1,5 @@
- fn main() {
--    old();
-+    setup();
-+    run();
- }
-`;
-
-const NEW_PATCH = `diff --git a/src/new.rs b/src/new.rs
-new file mode 100644
---- /dev/null
-+++ b/src/new.rs
-@@ -0,0 +1,2 @@
-+fn helper() {
-+}
-`;
-
-/** A user turn that reports the files it changed. */
-function turn(
-  id: string,
-  diffs: Record<string, unknown>[],
-): { info: Record<string, unknown>; parts: unknown[] } {
-  return { info: { id, sessionID: SESSION, role: 'user', summary: { diffs } }, parts: [] };
+function change(over: Partial<Record<string, unknown>> = {}) {
+  return {
+    file: 'src/a.rs',
+    previous: null,
+    additions: 1,
+    deletions: 0,
+    status: 'modified',
+    binary: false,
+    truncated: false,
+    patch: '',
+    ...over,
+  };
 }
 
-/** The first file carries its patch, the second only its counts. */
-const MESSAGES = [
-  turn('msg_1', [
-    { file: 'src/main.rs', additions: 2, deletions: 1, status: 'modified', patch: MAIN_PATCH },
-    { file: 'src/new.rs', additions: 2, deletions: 0, status: 'added' },
-  ]),
-];
+const PATCH = '@@ -1,2 +1,2 @@\n a\n-b\n+c';
 
-const PATCHES: Record<string, string> = { 'src/main.rs': MAIN_PATCH, 'src/new.rs': NEW_PATCH };
+function mockDiff(byPath: Record<string, ReturnType<typeof change>>) {
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = new URL(String(input), 'http://localhost');
+    const path = url.searchParams.get('path');
+    if (path === null) {
+      return Promise.resolve(json({ head: HEAD, changes: Object.values(byPath) }));
+    }
+    const found = byPath[path];
+    return Promise.resolve(json({ head: HEAD, changes: found ? [found] : [] }));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+}
 
-function jsonResponse(status: number, body: unknown) {
+function json(body: unknown) {
   return {
-    ok: status >= 200 && status < 300,
-    status,
+    ok: true,
+    status: 200,
     statusText: 'OK',
     text: async () => JSON.stringify(body),
     json: async () => body,
   };
 }
 
-/** The diff route only answers for a message, and only with a real patch. */
-function mockApi(messages: unknown[], patches: Record<string, string> = PATCHES) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/message')) return Promise.resolve(jsonResponse(200, messages));
-      if (url.includes('/diff')) {
-        const messageId = new URL(url, 'http://x').searchParams.get('messageID');
-        const body = messageId
-          ? Object.entries(patches).map(([file, patch]) => ({
-              file,
-              patch,
-              additions: 2,
-              deletions: 1,
-            }))
-          : [];
-        return Promise.resolve(jsonResponse(200, body));
-      }
-      return Promise.resolve(jsonResponse(404, { error: 'no route' }));
-    }),
-  );
-}
-
 function renderPanel() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={queryClient}>
-      <CodeReviewPanel sessionId={SESSION} />
+    <QueryClientProvider client={client}>
+      <CodeReviewPanel userId={USER} projectId={PROJECT} directory={DIRECTORY} />
     </QueryClientProvider>,
   );
 }
 
-afterEach(() => {
+function list() {
+  return within(screen.getByRole('list', { name: S.review.filesLabel }));
+}
+
+beforeEach(() => {
   vi.unstubAllGlobals();
-  localStorage.clear();
 });
 
-describe('CodeReviewPanel', () => {
-  it('lists the files the session changed, with status and counts', async () => {
-    mockApi(MESSAGES);
+describe('CodeReviewPanel from git', () => {
+  it('lists exactly the files git reports', async () => {
+    mockDiff({
+      'src/a.rs': change(),
+      'src/b.rs': change({ file: 'src/b.rs', status: 'untracked', additions: 12 }),
+    });
     renderPanel();
-    const list = within(await screen.findByRole('list', { name: S.review.filesLabel }));
-    const row = within(list.getByRole('button', { name: 'src/main.rs' }));
 
-    expect(list.getByRole('button', { name: 'src/new.rs' })).toBeInTheDocument();
-    expect(row.getByText('modified')).toBeInTheDocument();
-    expect(row.getByText('+2')).toBeInTheDocument();
-    expect(row.getByText('-1')).toBeInTheDocument();
+    await waitFor(() => expect(list().getAllByRole('button')).toHaveLength(2));
+    expect(list().getByRole('button', { name: 'src/a.rs' })).toBeInTheDocument();
+    expect(list().getByRole('button', { name: 'src/b.rs' })).toBeInTheDocument();
   });
 
-  it('renders the patch a message already carried', async () => {
-    mockApi(MESSAGES);
+  it('shows the status git gave each file', async () => {
+    mockDiff({
+      'src/new.rs': change({ file: 'src/new.rs', status: 'untracked', additions: 4 }),
+    });
     renderPanel();
+
+    const row = await screen.findByRole('button', { name: 'src/new.rs' });
+    expect(row.textContent).toContain('untracked');
+    expect(row.textContent).toContain('+4');
+  });
+
+  it('never asks the session proxy for a diff', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      void input;
+      return Promise.resolve(json({ head: HEAD, changes: [change({ patch: PATCH })] }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderPanel();
+
+    await screen.findByTestId('diff-viewer');
+    const urls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(urls.every((url) => !url.includes('/session/'))).toBe(true);
+    expect(urls.every((url) => url.includes('/diff'))).toBe(true);
+  });
+
+  it('renders the patch git returned', async () => {
+    mockDiff({ 'src/a.rs': change({ patch: PATCH }) });
+    renderPanel();
+
     const viewer = await screen.findByTestId('diff-viewer');
-
-    expect(within(viewer).getByText('fn main() {')).toBeInTheDocument();
-    expect(viewer.textContent).toContain('+    run();');
-    expect(viewer.textContent).toContain('-    old();');
+    expect(viewer.textContent).toContain('-b');
+    expect(viewer.textContent).toContain('+c');
   });
 
-  it('loads the patch for a file whose summary only had counts', async () => {
-    mockApi(MESSAGES);
-    const user = userEvent.setup();
+  it('renders an untracked file instead of saying there is no patch', async () => {
+    const untracked = PATCH.replace('@@ -1,2 +1,2 @@', '@@ -0,0 +1,2 @@');
+    mockDiff({
+      'src/new.rs': change({ file: 'src/new.rs', status: 'untracked', additions: 2, patch: untracked }),
+    });
     renderPanel();
-    const list = within(await screen.findByRole('list', { name: S.review.filesLabel }));
 
-    await user.click(list.getByRole('button', { name: 'src/new.rs' }));
-
-    expect(await screen.findByText('fn helper() {')).toBeInTheDocument();
+    const viewer = await screen.findByTestId('diff-viewer');
+    expect(viewer.textContent).toContain('+c');
     expect(screen.queryByText(S.review.noPatch)).not.toBeInTheDocument();
   });
 
-  it('asks the diff route for the patch of the message that changed the file', async () => {
-    const urls: string[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((input: RequestInfo | URL) => {
-        const url = String(input);
-        urls.push(url);
-        if (url.includes('/message')) return Promise.resolve(jsonResponse(200, MESSAGES));
-        if (url.includes('/diff')) {
-          return Promise.resolve(
-            jsonResponse(200, [
-              { file: 'src/main.rs', patch: MAIN_PATCH, additions: 2, deletions: 1 },
-              { file: 'src/new.rs', patch: NEW_PATCH, additions: 2, deletions: 0 },
-            ]),
-          );
-        }
-        return Promise.resolve(jsonResponse(404, { error: 'no route' }));
-      }),
-    );
-    const user = userEvent.setup();
+  it('says so when a file is binary rather than showing an empty viewer', async () => {
+    mockDiff({
+      'logo.png': change({ file: 'logo.png', binary: true, additions: 0, deletions: 0 }),
+    });
     renderPanel();
-    const list = within(await screen.findByRole('list', { name: S.review.filesLabel }));
 
-    // main.rs already has a patch, so nothing is fetched until new.rs is picked.
-    expect(urls.filter((url) => url.includes('/diff'))).toHaveLength(0);
+    expect(await screen.findByText(S.review.binaryFile)).toBeInTheDocument();
+    expect(screen.queryByTestId('diff-viewer')).not.toBeInTheDocument();
+  });
 
-    await user.click(list.getByRole('button', { name: 'src/new.rs' }));
-    await screen.findByText('fn helper() {');
+  it('warns when the patch was too large to send whole', async () => {
+    mockDiff({ 'big.rs': change({ file: 'big.rs', truncated: true, patch: PATCH }) });
+    renderPanel();
 
-    const diffCalls = urls.filter((url) => url.includes('/diff'));
-    expect(diffCalls).toHaveLength(1);
-    expect(diffCalls[0]).toContain('messageID=msg_1');
+    expect(await screen.findByText(S.review.patchTruncated)).toBeInTheDocument();
+  });
+
+  it('names the commit it is comparing against', async () => {
+    mockDiff({ 'src/a.rs': change({ patch: PATCH }) });
+    renderPanel();
+
+    const base = await screen.findByTestId('review-base');
+    expect(base.textContent).toContain(HEAD.slice(0, 12));
   });
 
   it('switches the viewer when another file is picked', async () => {
-    mockApi([
-      turn('msg_1', [
-        { file: 'src/main.rs', additions: 2, deletions: 1, patch: MAIN_PATCH },
-        { file: 'src/new.rs', additions: 2, deletions: 0 },
-      ]),
-      turn('msg_2', [{ file: 'src/other.rs', additions: 1, deletions: 0 }]),
-    ]);
+    mockDiff({
+      'src/a.rs': change({ patch: PATCH }),
+      'src/b.rs': change({ file: 'src/b.rs', patch: '@@ -9,1 +9,1 @@\n-x\n+y' }),
+    });
     const user = userEvent.setup();
     renderPanel();
-    const list = within(await screen.findByRole('list', { name: S.review.filesLabel }));
 
-    await user.click(list.getByRole('button', { name: 'src/main.rs' }));
+    await screen.findByTestId('diff-viewer');
+    await user.click(list().getByRole('button', { name: 'src/b.rs' }));
 
-    expect(screen.getByText('fn main() {')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('diff-viewer').textContent).toContain('+y');
+    });
   });
 
-  it('says so when a file has no patch to show', async () => {
-    // No summary carried a patch and the diff route has nothing either.
-    mockApi(
-      [turn('msg_1', [{ file: 'src/main.rs', additions: 2, deletions: 1, status: 'modified' }])],
-      {},
-    );
+  it('shows the empty state when git reports nothing', async () => {
+    mockDiff({});
     renderPanel();
-    const list = within(await screen.findByRole('list', { name: S.review.filesLabel }));
 
-    expect(list.getByRole('button', { name: 'src/main.rs' })).toBeInTheDocument();
-    expect(await screen.findByText(S.review.noPatch)).toBeInTheDocument();
-  });
-
-  it('shows an empty state when the session changed no files', async () => {
-    mockApi([turn('msg_1', [])]);
-    renderPanel();
     expect(await screen.findByText(S.review.emptyTitle)).toBeInTheDocument();
   });
 
-  it('surfaces a failure reading the conversation', async () => {
+  it('surfaces a failure reading git', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(() => Promise.resolve(jsonResponse(500, { error: 'diff unavailable' }))),
+      vi.fn(() =>
+        Promise.resolve({
+          ok: false,
+          status: 500,
+          statusText: 'Server Error',
+          text: async () => JSON.stringify({ error: { message: 'git failed' } }),
+          json: async () => ({}),
+        }),
+      ),
     );
     renderPanel();
-    expect(await screen.findByText('diff unavailable')).toBeInTheDocument();
+
+    expect(await screen.findByText('git failed')).toBeInTheDocument();
   });
 });
