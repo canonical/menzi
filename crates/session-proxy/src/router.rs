@@ -178,12 +178,128 @@ pub fn session_from_path(path: &str) -> Option<&str> {
     }
 }
 
+const CAPABILITY_ROUTES: [&str; 3] = ["/api/model", "/agent", "/api/agent"];
+
+pub fn is_capability_path(path: &str) -> bool {
+    CAPABILITY_ROUTES.contains(&path)
+}
+
+/// Whether a capability request came alongside a session, which is how the
+/// composer asks the workspace it is about to prompt rather than a shared
+/// instance.
+pub fn session_hint(path: &str, query: Option<&str>) -> Option<String> {
+    if is_capability_path(path) {
+        return query
+            .and_then(|query| {
+                query.split('&').find_map(|pair| {
+                    let (key, value) = pair.split_once('=')?;
+                    (key == "session" && !value.is_empty()).then(|| percent_decode(value))
+                })
+            })
+            .filter(|session| !session.is_empty());
+    }
+    session_from_path(path).map(str::to_string)
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or("");
+                match u8::from_str_radix(hex, 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        index += 3;
+                    }
+                    Err(_) => {
+                        out.push(bytes[index]);
+                        index += 1;
+                    }
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 pub fn endpoint_override(headers: &axum::http::HeaderMap) -> Option<String> {
     headers
         .get(HEADER_WORKSPACE_ENDPOINT)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string)
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+
+    #[test]
+    fn a_capability_path_is_recognised() {
+        assert!(is_capability_path("/api/model"));
+        assert!(is_capability_path("/agent"));
+        assert!(is_capability_path("/api/agent"));
+    }
+
+    #[test]
+    fn a_session_route_is_not_a_capability_path() {
+        assert!(!is_capability_path("/session/ses_1/message"));
+        assert!(!is_capability_path("/vcs/status"));
+    }
+
+    #[test]
+    fn a_capability_request_carries_its_session_in_the_query() {
+        assert_eq!(
+            session_hint("/api/model", Some("session=ses_abc")),
+            Some("ses_abc".to_string())
+        );
+    }
+
+    #[test]
+    fn a_capability_session_is_percent_decoded() {
+        assert_eq!(
+            session_hint("/agent", Some("session=ses%5Fa%2Bb")),
+            Some("ses_a+b".to_string())
+        );
+    }
+
+    #[test]
+    fn a_capability_request_without_a_session_has_no_hint() {
+        assert_eq!(session_hint("/api/model", None), None);
+        assert_eq!(session_hint("/api/model", Some("other=1")), None);
+        assert_eq!(session_hint("/api/model", Some("session=")), None);
+    }
+
+    #[test]
+    fn a_capability_hint_ignores_a_later_session_pair() {
+        assert_eq!(
+            session_hint("/api/model", Some("a=1&session=ses_x&b=2")),
+            Some("ses_x".to_string())
+        );
+    }
+
+    #[test]
+    fn a_session_route_takes_its_hint_from_the_path() {
+        assert_eq!(
+            session_hint("/session/ses_1/message", None),
+            Some("ses_1".to_string())
+        );
+        assert_eq!(
+            session_hint("/session/ses_1/message", Some("session=ses_2")),
+            Some("ses_1".to_string())
+        );
+    }
 }
 
 #[cfg(test)]
