@@ -1,4 +1,4 @@
-use axum::extract::{FromRequestParts, Path, State};
+use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -117,6 +117,10 @@ pub fn create_router(state: WorkspaceApiState) -> axum::Router {
         .route(
             "/api/v1/workspaces/{user_id}/{project_id}/terminal",
             post(run_terminal),
+        )
+        .route(
+            "/api/v1/workspaces/{user_id}/{project_id}/diff",
+            get(workspace_diff),
         )
         .route(
             "/api/v1/projects/{project_id}/workspaces",
@@ -437,6 +441,30 @@ async fn run_terminal(
     server_result(state.manager.terminal(&key, &spec.into()).await)
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DiffQuery {
+    pub directory: Option<String>,
+    pub path: Option<String>,
+}
+
+async fn workspace_diff(
+    State(state): State<WorkspaceApiState>,
+    Caller(caller): Caller,
+    Path((user_id, project_id)): Path<(UserId, ProjectId)>,
+    Query(query): Query<DiffQuery>,
+) -> Response {
+    let key = WorkspaceKey::new(user_id, project_id);
+    if let Err(error) = guard(&state, &caller, &key).await {
+        return server_error(error);
+    }
+    server_result(
+        state
+            .manager
+            .tree_changes(&key, query.directory.as_deref(), query.path.as_deref())
+            .await,
+    )
+}
+
 async fn destroy_workspace(
     State(state): State<WorkspaceApiState>,
     Caller(caller): Caller,
@@ -749,6 +777,59 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(json_of(response).await.as_array().unwrap().len(), 1);
+        let sessions = json_of(
+            send(
+                &app,
+                user,
+                "GET",
+                &format!("/api/v1/workspaces/{user}/{project}/sessions"),
+                None,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            sessions[0].get("directory").and_then(|d| d.as_str()),
+            Some("/workspace")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_diff_route_reports_the_working_tree() {
+        let project = ProjectId::new();
+        let user = UserId::new();
+        let app = open_app(project);
+        ensure(&app, user, project).await;
+        let response = send(
+            &app,
+            user,
+            "GET",
+            &format!("/api/v1/workspaces/{user}/{project}/diff"),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_of(response).await;
+        assert!(body.get("head").is_some(), "the commit it compares against");
+        assert!(body.get("changes").unwrap().is_array());
+    }
+
+    #[tokio::test]
+    async fn the_diff_route_needs_an_identity() {
+        let project = ProjectId::new();
+        let user = UserId::new();
+        let app = open_app(project);
+        ensure(&app, user, project).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/workspaces/{user}/{project}/diff"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

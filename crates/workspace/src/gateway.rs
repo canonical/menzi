@@ -105,6 +105,10 @@ fn session_from(value: &serde_json::Value) -> Option<AgentSession> {
             .get("title")
             .and_then(|title| title.as_str())
             .map(str::to_string),
+        directory: value
+            .get("directory")
+            .and_then(|directory| directory.as_str())
+            .map(str::to_string),
     })
 }
 
@@ -197,6 +201,21 @@ mod tests {
         let session = session_from(&value).unwrap();
         assert_eq!(session.id, "ses_1");
         assert_eq!(session.title.as_deref(), Some("refactor"));
+    }
+
+    #[test]
+    fn session_from_reads_the_working_directory() {
+        let value = serde_json::json!({ "id": "ses_1", "directory": "/workspace" });
+        assert_eq!(
+            session_from(&value).unwrap().directory.as_deref(),
+            Some("/workspace")
+        );
+    }
+
+    #[test]
+    fn session_from_tolerates_a_missing_directory() {
+        let value = serde_json::json!({ "id": "ses_1" });
+        assert_eq!(session_from(&value).unwrap().directory, None);
     }
 
     #[test]

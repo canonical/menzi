@@ -9,9 +9,11 @@ use crate::gateway::OpencodeGateway;
 use crate::registry::{SessionBinding, SessionKind, SessionRegistry};
 use crate::store::WorkspaceStore;
 use crate::types::{
-    AgentSession, PromptOutcome, ReconcileReport, TerminalRequest, TerminalResult, Workspace,
-    WorkspaceKey, WorkspaceSpec, WorkspaceStatus,
+    AgentSession, PromptOutcome, ReconcileReport, TerminalRequest, TerminalResult, TreeChange,
+    TreeDiff, Workspace, WorkspaceKey, WorkspaceSpec, WorkspaceStatus,
 };
+
+const MAX_PATCH_BYTES: usize = 2 * 1024 * 1024;
 
 pub trait WorkspaceAudit: Send + Sync {
     fn record(&self, action: &str, principal: &str, key: &WorkspaceKey, detail: &str);
@@ -339,6 +341,7 @@ impl WorkspaceManager {
             let session = AgentSession {
                 id: session_id.to_string(),
                 title: None,
+                directory: None,
             };
             self.record_binding(principal, key, &session, kind).await?;
         }
@@ -363,6 +366,207 @@ impl WorkspaceManager {
         key: &WorkspaceKey,
         request: &TerminalRequest,
     ) -> Result<TerminalResult> {
+        let instance = self.running_instance(key).await?;
+        self.driver.exec(&instance, request).await
+    }
+
+    pub async fn tree_changes(
+        &self,
+        key: &WorkspaceKey,
+        directory: Option<&str>,
+        path: Option<&str>,
+    ) -> Result<TreeDiff> {
+        let instance = self.running_instance(key).await?;
+        let repo = directory.unwrap_or("/workspace");
+        let head = self.head(&instance, repo).await?;
+        let statuses = porcelain(&self.status(&instance, repo).await?);
+
+        if let Some(path) = path {
+            let path = check_path(path)?;
+            let Some(entry) = statuses.into_iter().find(|entry| entry.file == path) else {
+                return Ok(TreeDiff {
+                    head,
+                    changes: Vec::new(),
+                });
+            };
+            let change = self.with_counts_and_patch(&instance, repo, entry).await?;
+            return Ok(TreeDiff {
+                head,
+                changes: vec![change],
+            });
+        }
+
+        let counts = numstat_by_file(
+            &self
+                .git(
+                    &instance,
+                    repo,
+                    vec!["diff".into(), "--numstat".into(), "HEAD".into()],
+                )
+                .await
+                .unwrap_or_default(),
+        );
+
+        let mut changes = Vec::with_capacity(statuses.len());
+        for entry in statuses {
+            changes.push(self.with_counts(&instance, repo, entry, &counts).await?);
+        }
+
+        Ok(TreeDiff { head, changes })
+    }
+
+    async fn with_counts(
+        &self,
+        instance: &str,
+        repo: &str,
+        entry: PorcelainEntry,
+        counts: &HashMap<String, Counts>,
+    ) -> Result<TreeChange> {
+        let file = entry.file.clone();
+        let counts = if entry.status == UNTRACKED {
+            self.untracked_counts(instance, repo, &file).await?
+        } else {
+            counts.get(&file).copied().unwrap_or_default()
+        };
+        Ok(TreeChange {
+            file,
+            previous: entry.previous,
+            additions: counts.additions,
+            deletions: counts.deletions,
+            status: entry.status,
+            binary: counts.binary,
+            truncated: false,
+            patch: String::new(),
+        })
+    }
+
+    async fn with_counts_and_patch(
+        &self,
+        instance: &str,
+        repo: &str,
+        entry: PorcelainEntry,
+    ) -> Result<TreeChange> {
+        let file = entry.file.clone();
+        let tracked = numstat_by_file(
+            &self
+                .git(
+                    instance,
+                    repo,
+                    vec![
+                        "diff".into(),
+                        "--numstat".into(),
+                        "HEAD".into(),
+                        "--".into(),
+                        file,
+                    ],
+                )
+                .await
+                .unwrap_or_default(),
+        );
+        let mut change = self.with_counts(instance, repo, entry, &tracked).await?;
+
+        let raw = if change.status == UNTRACKED {
+            self.untracked_patch(instance, repo, &change.file).await?
+        } else {
+            self.git(
+                instance,
+                repo,
+                vec![
+                    "diff".into(),
+                    "HEAD".into(),
+                    "--".into(),
+                    change.file.clone(),
+                ],
+            )
+            .await?
+        };
+
+        let (patch, truncated) = truncate_patch(raw);
+        change.patch = patch;
+        change.truncated = truncated;
+        Ok(change)
+    }
+
+    async fn untracked_counts(&self, instance: &str, repo: &str, path: &str) -> Result<Counts> {
+        let out = self
+            .git(
+                instance,
+                repo,
+                vec![
+                    "diff".into(),
+                    "--numstat".into(),
+                    "--no-index".into(),
+                    "--".into(),
+                    "/dev/null".into(),
+                    path.to_string(),
+                ],
+            )
+            .await
+            .unwrap_or_default();
+        Ok(counts_of(&out))
+    }
+
+    async fn untracked_patch(&self, instance: &str, repo: &str, path: &str) -> Result<String> {
+        Ok(self
+            .git(
+                instance,
+                repo,
+                vec![
+                    "diff".into(),
+                    "--no-color".into(),
+                    "--no-index".into(),
+                    "--".into(),
+                    "/dev/null".into(),
+                    path.to_string(),
+                ],
+            )
+            .await
+            .unwrap_or_default())
+    }
+
+    async fn status(&self, instance: &str, repo: &str) -> Result<String> {
+        self.git(
+            instance,
+            repo,
+            vec![
+                "status".into(),
+                "--porcelain".into(),
+                "-z".into(),
+                "--untracked-files=all".into(),
+            ],
+        )
+        .await
+    }
+
+    async fn head(&self, instance: &str, repo: &str) -> Result<String> {
+        Ok(self
+            .git(instance, repo, vec!["rev-parse".into(), "HEAD".into()])
+            .await?
+            .trim()
+            .to_string())
+    }
+
+    async fn line_count(&self, instance: &str, repo: &str, path: &str) -> Result<usize> {
+        let out = self
+            .git(
+                instance,
+                repo,
+                vec![
+                    "diff".into(),
+                    "--no-color".into(),
+                    "--no-index".into(),
+                    "--numstat".into(),
+                    "--".into(),
+                    "/dev/null".into(),
+                    path.to_string(),
+                ],
+            )
+            .await
+            .unwrap_or_default();
+        Ok(parse_numstat(&out).0)
+    }
+
+    async fn running_instance(&self, key: &WorkspaceKey) -> Result<String> {
         let workspace = self.get_workspace(key).await?;
         if !workspace.status.accepts_work() {
             return Err(MenziError::Conflict(format!(
@@ -377,7 +581,21 @@ impl WorkspaceManager {
         if !self.driver.is_running(&instance).await? {
             self.start(key).await?;
         }
-        self.driver.exec(&instance, request).await
+        Ok(instance)
+    }
+
+    async fn git(&self, instance: &str, repo: &str, args: Vec<String>) -> Result<String> {
+        let request = TerminalRequest::new("git")
+            .arg("-c")
+            .arg("safe.directory=*")
+            .arg("-c")
+            .arg("core.quotepath=false")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .timeout_secs(Some(30));
+        let result = self.driver.exec(instance, &request).await?;
+        Ok(result.stdout)
     }
 
     pub async fn destroy_workspace(&self, principal: &str, key: &WorkspaceKey) -> Result<()> {
@@ -543,6 +761,139 @@ fn now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+struct PorcelainEntry {
+    file: String,
+    previous: Option<String>,
+    status: String,
+}
+
+const UNTRACKED: &str = "untracked";
+
+fn porcelain(out: &str) -> Vec<PorcelainEntry> {
+    let records: Vec<&str> = out.split('\0').collect();
+    let mut entries = Vec::new();
+    let mut index = 0;
+
+    while index < records.len() {
+        let record = records[index];
+        let Some(code) = record.get(0..2) else {
+            index += 1;
+            continue;
+        };
+        let file = record.get(3..).unwrap_or("").trim().to_string();
+        if file.is_empty() {
+            index += 1;
+            continue;
+        }
+        let previous = if is_rename(code) {
+            index += 1;
+            Some(records.get(index).copied().unwrap_or_default().to_string())
+        } else {
+            None
+        };
+        entries.push(PorcelainEntry {
+            file,
+            previous,
+            status: status_word(code).unwrap_or_else(|| "modified".to_string()),
+        });
+        index += 1;
+    }
+
+    entries
+}
+
+fn is_rename(code: &str) -> bool {
+    code.starts_with('R') || code.starts_with('C')
+}
+
+fn check_path(path: &str) -> Result<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('/')
+        || trimmed.starts_with('-')
+        || trimmed.split('/').any(|segment| segment == "..")
+    {
+        return Err(MenziError::Validation(format!(
+            "'{path}' is not a path inside the repository"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn truncate_patch(raw: String) -> (String, bool) {
+    if raw.len() <= MAX_PATCH_BYTES {
+        return (raw, false);
+    }
+    let mut end = MAX_PATCH_BYTES;
+    while end > 0 && !raw.is_char_boundary(end) {
+        end -= 1;
+    }
+    (raw[..end].to_string(), true)
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Counts {
+    additions: usize,
+    deletions: usize,
+    binary: bool,
+}
+
+fn counts_of(line: &str) -> Counts {
+    let mut parts = line.splitn(3, '\t');
+    let (Some(additions), Some(deletions), Some(_)) = (parts.next(), parts.next(), parts.next())
+    else {
+        return Counts::default();
+    };
+    if additions == "-" || deletions == "-" {
+        return Counts {
+            binary: true,
+            ..Counts::default()
+        };
+    }
+    match (additions.parse(), deletions.parse()) {
+        (Ok(additions), Ok(deletions)) => Counts {
+            additions,
+            deletions,
+            binary: false,
+        },
+        _ => Counts::default(),
+    }
+}
+
+fn numstat_by_file(out: &str) -> std::collections::HashMap<String, Counts> {
+    let mut by_file = std::collections::HashMap::new();
+    for line in out.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let (Some(_), Some(_), Some(file)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        by_file.insert(file.trim().to_string(), counts_of(line));
+    }
+    by_file
+}
+
+fn parse_numstat(out: &str) -> (usize, usize) {
+    numstat_by_file(out)
+        .values()
+        .fold((0, 0), |(a, d), counts| {
+            (a + counts.additions, d + counts.deletions)
+        })
+}
+
+fn status_word(code: &str) -> Option<String> {
+    let word = match code {
+        "??" => UNTRACKED,
+        "M " | " M" | "MM" => "modified",
+        "A " | " A" | "AM" => "added",
+        "D " | " D" => "deleted",
+        "R " | " R" => "renamed",
+        "C " | " C" => "copied",
+        "T " | " T" => "modified",
+        _ => return None,
+    };
+    Some(word.to_string())
+}
+
 fn now_time() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now()
 }
@@ -556,12 +907,52 @@ pub(crate) mod testbed {
     use menzi_common::Result;
     use std::sync::Mutex as StdMutex;
 
+    pub const GIT: &str = "git -c safe.directory=* -c core.quotepath=false -C /workspace";
+
+    pub fn status_cmd() -> String {
+        format!("{GIT} status --porcelain -z --untracked-files=all")
+    }
+
+    pub fn head_cmd() -> String {
+        format!("{GIT} rev-parse HEAD")
+    }
+
+    pub fn numstat_all_cmd() -> String {
+        format!("{GIT} diff --numstat HEAD")
+    }
+
+    pub fn numstat_one_cmd(path: &str) -> String {
+        format!("{GIT} diff --numstat HEAD -- {path}")
+    }
+
+    pub fn patch_one_cmd(path: &str) -> String {
+        format!("{GIT} diff HEAD -- {path}")
+    }
+
+    pub fn untracked_numstat_cmd(path: &str) -> String {
+        format!("{GIT} diff --numstat --no-index -- /dev/null {path}")
+    }
+
+    pub fn untracked_diff_cmd(path: &str) -> String {
+        format!("{GIT} diff --no-color --no-index -- /dev/null {path}")
+    }
+
     #[derive(Clone, Default)]
     pub struct RecordingDriver {
         pub calls: Arc<StdMutex<Vec<String>>>,
         pub fail_provision: Arc<StdMutex<bool>>,
         pub fail_resolve: Arc<StdMutex<bool>>,
         pub running: Arc<StdMutex<bool>>,
+        pub output: Arc<StdMutex<HashMap<String, String>>>,
+    }
+
+    impl RecordingDriver {
+        pub fn answers(&self, request: impl AsRef<str>, stdout: impl AsRef<str>) {
+            self.output
+                .lock()
+                .expect("driver output lock")
+                .insert(request.as_ref().to_string(), stdout.as_ref().to_string());
+        }
     }
 
     #[async_trait]
@@ -607,9 +998,16 @@ pub(crate) mod testbed {
                 .lock()
                 .unwrap()
                 .push(format!("exec:{instance}:{request:?}"));
+            let stdout = {
+                let scripted = self.output.lock().expect("driver output lock");
+                match scripted.get(&format!("{} {}", request.command, request.args.join(" "))) {
+                    Some(out) => out.clone(),
+                    None => "ok".to_string(),
+                }
+            };
             Ok(TerminalResult {
                 exit_code: 0,
-                stdout: "ok".to_string(),
+                stdout,
                 stderr: String::new(),
                 timed_out: false,
             })
@@ -671,6 +1069,7 @@ pub(crate) mod testbed {
             Ok(AgentSession {
                 id: "ses_1".to_string(),
                 title: title.map(str::to_string),
+                directory: Some("/workspace".to_string()),
             })
         }
 
@@ -708,6 +1107,7 @@ pub(crate) mod testbed {
             Ok(vec![AgentSession {
                 id: "ses_1".to_string(),
                 title: None,
+                directory: Some("/workspace".to_string()),
             }])
         }
     }
@@ -1222,6 +1622,418 @@ mod tests {
             .terminal(&k, &TerminalRequest::new("ls"))
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn tree_changes_read_the_working_tree_with_git() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+        h.driver.answers(status_cmd(), " M src/a.rs\0");
+        h.driver.answers(numstat_all_cmd(), "3\t1\tsrc/a.rs\n");
+        h.driver.answers(head_cmd(), "abc123\n");
+
+        let diff = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), None)
+            .await
+            .unwrap();
+
+        assert_eq!(diff.head, "abc123");
+        assert_eq!(
+            diff.changes
+                .iter()
+                .map(|c| (c.file.as_str(), c.additions, c.deletions, c.status.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("src/a.rs", 3, 1, "modified")]
+        );
+        assert!(diff.changes.iter().all(|c| c.patch.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn tree_changes_count_an_untracked_file_by_its_lines() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+        h.driver.answers(status_cmd(), "?? src/new.rs\0");
+        h.driver.answers(numstat_all_cmd(), "");
+        h.driver.answers(head_cmd(), "abc123\n");
+        h.driver.answers(
+            untracked_numstat_cmd("src/new.rs"),
+            "12\t0\t/dev/null => src/new.rs\0",
+        );
+
+        let diff = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), None)
+            .await
+            .unwrap();
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].file, "src/new.rs");
+        assert_eq!(diff.changes[0].status, "untracked");
+        assert_eq!(diff.changes[0].additions, 12);
+        assert_eq!(diff.changes[0].deletions, 0);
+    }
+
+    #[tokio::test]
+    async fn tree_changes_give_an_untracked_file_a_patch() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+        h.driver.answers(status_cmd(), "?? src/new.rs\0");
+        h.driver.answers(head_cmd(), "abc123\n");
+        h.driver.answers(
+            untracked_numstat_cmd("src/new.rs"),
+            "2\t0\t/dev/null => src/new.rs\0",
+        );
+        h.driver.answers(
+            untracked_diff_cmd("src/new.rs"),
+            "@@ -0,0 +1,2 @@\n+a\n+b\n",
+        );
+
+        let diff = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), Some("src/new.rs"))
+            .await
+            .unwrap();
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].status, "untracked");
+        assert_eq!(diff.changes[0].additions, 2);
+        assert!(diff.changes[0].patch.contains("+b"));
+        assert!(!diff.changes[0].truncated);
+    }
+
+    #[tokio::test]
+    async fn tree_changes_flag_a_binary_file() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+        h.driver.answers(status_cmd(), " M logo.png\0");
+        h.driver.answers(numstat_all_cmd(), "-\t-\tlogo.png\n");
+        h.driver.answers(head_cmd(), "abc123\n");
+
+        let diff = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), None)
+            .await
+            .unwrap();
+
+        assert!(diff.changes[0].binary);
+        assert_eq!(diff.changes[0].additions, 0);
+    }
+
+    #[tokio::test]
+    async fn tree_changes_keep_both_sides_of_a_rename() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+        h.driver.answers(status_cmd(), "R  new.rs\0old.rs\0");
+        h.driver
+            .answers(numstat_all_cmd(), "0\t0\told.rs => new.rs\n");
+        h.driver.answers(head_cmd(), "abc123\n");
+
+        let diff = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), None)
+            .await
+            .unwrap();
+
+        assert_eq!(diff.changes[0].file, "new.rs");
+        assert_eq!(diff.changes[0].previous.as_deref(), Some("old.rs"));
+        assert_eq!(diff.changes[0].status, "renamed");
+    }
+
+    #[tokio::test]
+    async fn tree_changes_cap_an_oversized_patch() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+        h.driver.answers(status_cmd(), " M big.rs\0");
+        h.driver.answers(head_cmd(), "abc123\n");
+        h.driver
+            .answers(numstat_one_cmd("big.rs"), "1\t1\tbig.rs\n");
+        h.driver
+            .answers(patch_one_cmd("big.rs"), "+".repeat(MAX_PATCH_BYTES + 64));
+
+        let diff = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), Some("big.rs"))
+            .await
+            .unwrap();
+
+        assert!(diff.changes[0].truncated);
+        assert_eq!(diff.changes[0].patch.len(), MAX_PATCH_BYTES);
+    }
+
+    #[tokio::test]
+    async fn tree_changes_reject_a_path_outside_the_repository() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+
+        for path in [
+            "../../etc/passwd",
+            "/etc/passwd",
+            "--upload-pack=evil",
+            "  ",
+        ] {
+            assert!(
+                h.manager
+                    .tree_changes(&k, Some("/workspace"), Some(path))
+                    .await
+                    .is_err(),
+                "{path} should be refused"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tree_changes_ask_git_for_nul_separated_names() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+
+        h.manager
+            .tree_changes(&k, Some("/workspace"), None)
+            .await
+            .unwrap();
+
+        let calls = h.driver.calls.lock().unwrap().clone();
+        let status = calls
+            .iter()
+            .find(|call| call.contains("status"))
+            .expect("a status call");
+        assert!(status.contains("-z"), "{status}");
+        assert!(status.contains("core.quotepath=false"), "{status}");
+        assert!(status.contains("--untracked-files=all"), "{status}");
+    }
+
+    #[tokio::test]
+    async fn tree_changes_carry_a_patch_for_the_asked_file() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+        h.driver.answers(status_cmd(), " M src/a.rs\0");
+        h.driver.answers(head_cmd(), "abc123\n");
+        h.driver
+            .answers(numstat_one_cmd("src/a.rs"), "1\t1\tsrc/a.rs\n");
+        h.driver
+            .answers(patch_one_cmd("src/a.rs"), "@@ -1,2 +1,2 @@\n a\n-b\n+c\n");
+
+        let diff = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), Some("src/a.rs"))
+            .await
+            .unwrap();
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].file, "src/a.rs");
+        assert_eq!(diff.changes[0].additions, 1);
+        assert_eq!(diff.changes[0].deletions, 1);
+        assert_eq!(diff.changes[0].status, "modified");
+        assert!(diff.changes[0].patch.contains("@@ -1,2 +1,2 @@"));
+    }
+
+    #[tokio::test]
+    async fn tree_changes_are_empty_for_an_unchanged_file() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+        h.driver.answers(status_cmd(), "");
+        h.driver.answers(head_cmd(), "abc123\n");
+
+        let diff = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), Some("src/a.rs"))
+            .await
+            .unwrap();
+
+        assert!(diff.changes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tree_changes_default_to_the_workspace_root() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+
+        h.manager.tree_changes(&k, None, None).await.unwrap();
+
+        let calls = h.driver.calls.lock().unwrap().clone();
+        assert!(calls
+            .iter()
+            .any(|call| call.contains("git") && call.contains("/workspace")));
+    }
+
+    #[tokio::test]
+    async fn tree_changes_ask_git_to_trust_the_workspace() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+
+        h.manager
+            .tree_changes(&k, Some("/workspace"), None)
+            .await
+            .unwrap();
+
+        let calls = h.driver.calls.lock().unwrap().clone();
+        assert!(
+            calls.iter().any(|call| call.contains("safe.directory=*")),
+            "the repo is owned by the agent user but exec runs as root"
+        );
+    }
+
+    #[tokio::test]
+    async fn tree_changes_refuse_a_deleted_workspace() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+        h.manager.destroy_workspace("p", &k).await.unwrap();
+        assert!(h.manager.tree_changes(&k, None, None).await.is_err());
+    }
+
+    #[test]
+    fn porcelain_reads_nul_separated_records() {
+        let entries = porcelain(" M src/a.rs\0?? src/b.rs\0A  src/c.rs\0 D src/d.rs\0");
+        assert_eq!(entries[0].file, "src/a.rs");
+        assert_eq!(entries[0].status, "modified");
+        assert_eq!(entries[1].status, "untracked");
+        assert_eq!(entries[2].status, "added");
+        assert_eq!(entries[3].status, "deleted");
+    }
+
+    #[test]
+    fn porcelain_keeps_a_name_with_a_space_in_it() {
+        let entries = porcelain(" M my file.rs\0");
+        assert_eq!(entries[0].file, "my file.rs");
+    }
+
+    #[test]
+    fn porcelain_splits_a_rename_into_both_paths() {
+        let entries = porcelain("R  new.rs\0old.rs\0");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file, "new.rs");
+        assert_eq!(entries[0].previous.as_deref(), Some("old.rs"));
+    }
+
+    #[test]
+    fn porcelain_keeps_reading_after_a_rename() {
+        let entries = porcelain("R  new.rs\0old.rs\0 M other.rs\0");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].file, "new.rs");
+        assert_eq!(entries[1].file, "other.rs");
+        assert_eq!(entries[1].status, "modified");
+    }
+
+    #[test]
+    fn porcelain_ignores_a_blank_record() {
+        assert!(porcelain("\0\0").is_empty());
+    }
+
+    #[test]
+    fn numstat_pairs_each_file_with_its_counts() {
+        let by_file = numstat_by_file("4\t2\tsrc/a.rs\n");
+        assert_eq!(
+            by_file.get("src/a.rs"),
+            Some(&Counts {
+                additions: 4,
+                deletions: 2,
+                binary: false
+            })
+        );
+    }
+
+    #[test]
+    fn numstat_flags_a_binary_file_instead_of_dropping_it() {
+        let by_file = numstat_by_file("-\t-\tlogo.png\n");
+        let counts = by_file.get("logo.png").expect("the file is kept");
+        assert!(counts.binary);
+        assert_eq!(counts.additions, 0);
+    }
+
+    #[test]
+    fn a_porcelain_status_becomes_a_word() {
+        assert_eq!(status_word("M ").as_deref(), Some("modified"));
+        assert_eq!(status_word(" M").as_deref(), Some("modified"));
+        assert_eq!(status_word("??").as_deref(), Some("untracked"));
+        assert_eq!(status_word("A ").as_deref(), Some("added"));
+        assert_eq!(status_word("D ").as_deref(), Some("deleted"));
+        assert_eq!(status_word("R ").as_deref(), Some("renamed"));
+        assert_eq!(status_word("C ").as_deref(), Some("copied"));
+        assert_eq!(status_word("zz"), None);
+    }
+
+    #[test]
+    fn check_path_refuses_anything_outside_the_repository() {
+        assert!(check_path("../../etc/passwd").is_err());
+        assert!(check_path("/etc/passwd").is_err());
+        assert!(check_path("--upload-pack=x").is_err());
+        assert!(check_path("").is_err());
+        assert!(check_path("   ").is_err());
+        assert_eq!(check_path("src/a.rs").unwrap(), "src/a.rs");
+        assert_eq!(check_path(" src/a.rs ").unwrap(), "src/a.rs");
+        assert_eq!(check_path("a..b/c").unwrap(), "a..b/c");
+    }
+
+    #[test]
+    fn truncate_patch_only_cuts_a_patch_that_is_too_large() {
+        let (small, truncated) = truncate_patch("+a\n".to_string());
+        assert_eq!(small, "+a\n");
+        assert!(!truncated);
+
+        let (big, truncated) = truncate_patch("x".repeat(MAX_PATCH_BYTES + 1));
+        assert_eq!(big.len(), MAX_PATCH_BYTES);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn truncate_patch_cuts_on_a_character_boundary() {
+        let raw = "é".repeat(MAX_PATCH_BYTES);
+        let (cut, truncated) = truncate_patch(raw);
+        assert!(truncated);
+        assert!(cut.len() <= MAX_PATCH_BYTES);
+        assert!(cut.chars().all(|c| c == 'é'));
     }
 
     #[tokio::test]

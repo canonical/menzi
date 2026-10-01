@@ -126,6 +126,25 @@ pub struct WorkspaceSpec {
 pub struct AgentSession {
     pub id: String,
     pub title: Option<String>,
+    pub directory: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeChange {
+    pub file: String,
+    pub previous: Option<String>,
+    pub additions: usize,
+    pub deletions: usize,
+    pub status: String,
+    pub binary: bool,
+    pub truncated: bool,
+    pub patch: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeDiff {
+    pub head: String,
+    pub changes: Vec<TreeChange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +176,20 @@ impl TerminalRequest {
 
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
         self.args.push(arg.into());
+        self
+    }
+
+    pub fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
+    pub fn timeout_secs(mut self, timeout_secs: Option<u64>) -> Self {
+        self.timeout_secs = timeout_secs;
         self
     }
 
