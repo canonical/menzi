@@ -165,6 +165,49 @@ describe('ChatPanel', () => {
     renderWithClient(<ChatPanel sessionId={SESSION} />);
     expect(await screen.findByText('forms unavailable')).toBeInTheDocument();
   });
+
+  it('renders a fallback question card from a running question tool call', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/message')) {
+          return Promise.resolve(
+            jsonResponse(200, [
+              {
+                info: { id: 'm1', sessionID: SESSION, role: 'assistant' },
+                parts: [
+                  {
+                    type: 'tool',
+                    id: 'prt_1',
+                    tool: 'question',
+                    state: {
+                      status: 'running',
+                      input: {
+                        questions: [
+                          {
+                            question: 'Which fruit would you like to choose?',
+                            options: [
+                              { label: 'Banana', description: 'Yellow' },
+                              { label: 'Apple', description: 'Red' },
+                            ],
+                          },
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            ]),
+          );
+        }
+        if (url.includes('/form')) return Promise.resolve(new Response('not json', { status: 200 }));
+        return Promise.resolve(jsonResponse(404, { error: 'no route' }));
+      }),
+    );
+    renderWithClient(<ChatPanel sessionId={SESSION} />);
+    expect(await screen.findByText('Banana')).toBeInTheDocument();
+  });
 });
 
 describe('Composer', () => {

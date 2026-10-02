@@ -1,8 +1,8 @@
-import { useLayoutEffect } from 'react';
+import { useLayoutEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
-import { listMessages } from '../../lib/api/opencode';
+import { listMessages, sendPrompt } from '../../lib/api/opencode';
 import { getErrorMessage } from '../../lib/api/errors';
 import { queryKeys } from '../../lib/routes';
 import { useStickyScroll } from '../../hooks/useStickyScroll';
@@ -25,6 +25,7 @@ import { Markdown } from './Markdown';
 import { S } from '../../strings/catalogue';
 import { useSessionForms } from '../../lib/chat/useSessionForms';
 import { QuestionCard } from './chat/QuestionCard';
+import type { FormAnswer, QuestionForm } from '../../lib/api/forms';
 
 function errorText(info: MessageInfo): string {
   if (!info.error) return '';
@@ -68,6 +69,71 @@ function MessageParts({ parts }: { parts: MessagePart[] }) {
   );
 }
 
+function valueAsText(value: string | string[] | number | boolean): string {
+  if (Array.isArray(value)) return value.join(', ');
+  return String(value);
+}
+
+function answerAsMessage(answer: FormAnswer): string {
+  const entries = Object.entries(answer);
+  if (entries.length === 0) return '';
+  if (entries.length === 1) return valueAsText(entries[0][1]);
+  return entries.map(([key, value]) => `- ${key}: ${valueAsText(value)}`).join('\n');
+}
+
+function fallbackForms(messages: { messages: { parts?: MessagePart[] }[] } | undefined, sessionId: string): QuestionForm[] {
+  const built: QuestionForm[] = [];
+  const seen = new Set<string>();
+  for (const message of messages?.messages ?? []) {
+    for (const part of message.parts ?? []) {
+      if (!isToolPart(part) || part.tool !== 'question') continue;
+      if (part.state?.status !== 'running' && part.state?.status !== 'pending') continue;
+      const input = (part.state?.input ?? {}) as Record<string, unknown>;
+      const questions = Array.isArray(input.questions) ? input.questions : [];
+      if (questions.length === 0) continue;
+      const id = `fallback:${part.id}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const fields = questions.map((entry, index) => {
+        const row = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>;
+        const prompt = typeof row.question === 'string' && row.question.trim().length > 0
+          ? row.question.trim()
+          : typeof row.header === 'string' && row.header.trim().length > 0
+            ? row.header.trim()
+            : `Question ${index + 1}`;
+        const options = Array.isArray(row.options)
+          ? row.options.map((option, optionIndex) => {
+            const value = typeof option === 'object' && option !== null ? option as Record<string, unknown> : {};
+            const label = typeof value.label === 'string' && value.label.trim().length > 0 ? value.label.trim() : `Option ${optionIndex + 1}`;
+            return {
+              value: label,
+              label,
+              ...(typeof value.description === 'string' && value.description.trim().length > 0
+                ? { description: value.description.trim() }
+                : {}),
+            };
+          })
+          : [];
+        return {
+          key: `q${index + 1}`,
+          title: prompt,
+          type: row.multiple === true ? 'multiselect' as const : 'string' as const,
+          ...(options.length > 0 ? { options } : {}),
+          custom: true,
+        };
+      });
+      built.push({
+        id,
+        sessionID: sessionId,
+        title: 'Question',
+        fields,
+        metadata: { fallback: true },
+      });
+    }
+  }
+  return built;
+}
+
 export function ChatPanel({ sessionId }: { sessionId: string }) {
   useSessionStream(sessionId);
 
@@ -86,6 +152,11 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
 
   const working = isWorking(messagesQuery.data?.messages ?? []);
   const { forms, pending, submit, dismiss, error: formsError, refetch: refetchForms } = useSessionForms(sessionId);
+  const [hiddenFallback, setHiddenFallback] = useState<Record<string, true>>({});
+  const fallback = useMemo(() => fallbackForms(messagesQuery.data, sessionId), [messagesQuery.data, sessionId]);
+  const visibleFallback = forms.length === 0
+    ? fallback.filter((request) => !hiddenFallback[request.id])
+    : [];
 
   // Streamed parts grow the transcript without changing this component's props,
   // so follow the bottom after every render rather than on a message count.
@@ -146,6 +217,21 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
           ) : null}
           {forms.map((request) => (
             <QuestionCard key={request.id} request={request} onSubmit={(answer) => submit(request, answer)} onDismiss={() => dismiss(request)} />
+          ))}
+          {visibleFallback.map((request) => (
+            <QuestionCard
+              key={request.id}
+              request={request}
+              onSubmit={async (answer) => {
+                const text = answerAsMessage(answer);
+                if (!text) return;
+                await sendPrompt({ sessionId, text });
+                setHiddenFallback((previous) => ({ ...previous, [request.id]: true }));
+              }}
+              onDismiss={async () => {
+                setHiddenFallback((previous) => ({ ...previous, [request.id]: true }));
+              }}
+            />
           ))}
           {pending.length > 0 ? <p role="status" className="app-chat-working">{S.questions.waiting}</p> : working ? (
             <div className="app-chat-working">
