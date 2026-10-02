@@ -445,6 +445,7 @@ async fn run_terminal(
 pub struct DiffQuery {
     pub directory: Option<String>,
     pub path: Option<String>,
+    pub version: Option<String>,
 }
 
 async fn workspace_diff(
@@ -460,7 +461,12 @@ async fn workspace_diff(
     server_result(
         state
             .manager
-            .tree_changes(&key, query.directory.as_deref(), query.path.as_deref())
+            .tree_changes(
+                &key,
+                query.directory.as_deref(),
+                query.path.as_deref(),
+                query.version.as_deref(),
+            )
             .await,
     )
 }
@@ -483,18 +489,22 @@ async fn destroy_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manager::testbed::harness;
+    use crate::manager::testbed::{harness, head_cmd, numstat_all_cmd, status_cmd, Harness};
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
 
     fn open_app(project: ProjectId) -> axum::Router {
+        open_app_with_harness(project).0
+    }
+
+    fn open_app_with_harness(project: ProjectId) -> (axum::Router, Harness) {
         let h = harness();
         let api = WorkspaceApiState::new(Arc::new(h.manager.clone()), "mz-workspace")
             .with_authorizer(Arc::new(
                 crate::identity::MembershipAuthorizer::new().with_project(project),
             ));
-        create_router(api)
+        (create_router(api), h)
     }
 
     fn caller_headers(user: UserId) -> Vec<(&'static str, String)> {
@@ -811,7 +821,44 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = json_of(response).await;
         assert!(body.get("head").is_some(), "the commit it compares against");
+        assert!(body.get("version").is_some(), "the exact git state snapshot");
         assert!(body.get("changes").unwrap().is_array());
+    }
+
+    #[tokio::test]
+    async fn the_diff_route_rejects_a_stale_version_for_a_patch_request() {
+        let project = ProjectId::new();
+        let user = UserId::new();
+        let (app, h) = open_app_with_harness(project);
+        ensure(&app, user, project).await;
+        h.driver.answers(status_cmd(), " M src/a.rs\0");
+        h.driver.answers(numstat_all_cmd(), "1\t1\tsrc/a.rs\n");
+        h.driver.answers(head_cmd(), "abc123\n");
+
+        let list = send(
+            &app,
+            user,
+            "GET",
+            &format!("/api/v1/workspaces/{user}/{project}/diff"),
+            None,
+        )
+        .await;
+        let version = json_of(list).await["version"].as_str().unwrap().to_string();
+
+        h.driver.answers(status_cmd(), " M src/a.rs\0 M src/b.rs\0");
+        h.driver
+            .answers(numstat_all_cmd(), "1\t1\tsrc/a.rs\n2\t0\tsrc/b.rs\n");
+        let response = send(
+            &app,
+            user,
+            "GET",
+            &format!(
+                "/api/v1/workspaces/{user}/{project}/diff?path=src%2Fa.rs&version={version}"
+            ),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
