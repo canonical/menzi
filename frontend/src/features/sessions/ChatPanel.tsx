@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
-import { listMessages, sendPrompt } from '../../lib/api/opencode';
+import { listMessages } from '../../lib/api/opencode';
 import { getErrorMessage } from '../../lib/api/errors';
 import { queryKeys } from '../../lib/routes';
 import { useStickyScroll } from '../../hooks/useStickyScroll';
@@ -26,6 +26,7 @@ import { S } from '../../strings/catalogue';
 import { useSessionForms } from '../../lib/chat/useSessionForms';
 import { QuestionCard } from './chat/QuestionCard';
 import type { FormAnswer, QuestionForm } from '../../lib/api/forms';
+import { replyToForm } from '../../lib/api/forms';
 
 function errorText(info: MessageInfo): string {
   if (!info.error) return '';
@@ -69,30 +70,6 @@ function MessageParts({ parts }: { parts: MessagePart[] }) {
   );
 }
 
-function valueAsText(value: string | string[] | number | boolean): string {
-  if (Array.isArray(value)) return value.join(', ');
-  return String(value);
-}
-
-function answerAsMessage(answer: FormAnswer): string {
-  const entries = Object.entries(answer);
-  if (entries.length === 0) return '';
-  if (entries.length === 1) return valueAsText(entries[0][1]);
-  return entries.map(([key, value]) => `- ${key}: ${valueAsText(value)}`).join('\n');
-}
-
-function answerForRequest(request: QuestionForm, answer: FormAnswer): string {
-  const keys = Object.keys(answer);
-  if (keys.length === 0) return '';
-  if (keys.length === 1) {
-    const key = keys[0];
-    const field = request.fields.find((entry) => entry.key === key);
-    const prompt = field?.title || request.title;
-    return `${prompt}: ${valueAsText(answer[key])}`;
-  }
-  return answerAsMessage(answer);
-}
-
 function fallbackForms(messages: { messages: { parts?: MessagePart[] }[] } | undefined, sessionId: string): QuestionForm[] {
   const built: QuestionForm[] = [];
   const seen = new Set<string>();
@@ -106,6 +83,14 @@ function fallbackForms(messages: { messages: { parts?: MessagePart[] }[] } | und
       const id = `fallback:${part.id}`;
       if (seen.has(id)) continue;
       seen.add(id);
+      const candidates = [
+        typeof part.callID === 'string' ? part.callID : '',
+        part.id,
+        typeof input.formID === 'string' ? input.formID : '',
+        typeof input.formId === 'string' ? input.formId : '',
+        typeof input.form_id === 'string' ? input.form_id : '',
+        typeof input.id === 'string' ? input.id : '',
+      ].filter((entry, index, list) => entry.length > 0 && list.indexOf(entry) === index);
       const fields = questions.map((entry, index) => {
         const row = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>;
         const prompt = typeof row.question === 'string' && row.question.trim().length > 0
@@ -139,11 +124,32 @@ function fallbackForms(messages: { messages: { parts?: MessagePart[] }[] } | und
         sessionID: sessionId,
         title: 'Question',
         fields,
-        metadata: { fallback: true },
+        metadata: { fallback: true, formIDs: candidates },
       });
     }
   }
   return built;
+}
+
+async function submitFallback(
+  sessionId: string,
+  request: QuestionForm,
+  answer: FormAnswer,
+): Promise<void> {
+  const formIDs = Array.isArray(request.metadata?.formIDs)
+    ? request.metadata.formIDs.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+    : [];
+  let failure: unknown = null;
+  for (const formID of formIDs) {
+    try {
+      await replyToForm(sessionId, formID, answer);
+      return;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  if (failure) throw failure;
+  throw new Error('Could not resolve form id for this question');
 }
 
 export function ChatPanel({ sessionId }: { sessionId: string }) {
@@ -236,11 +242,10 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
               key={request.id}
               request={request}
               onSubmit={async (answer) => {
-                const text = answerForRequest(request, answer);
-                if (!text) return;
-                await sendPrompt({ sessionId, text });
+                await submitFallback(sessionId, request, answer);
                 queryClient.invalidateQueries({ queryKey: queryKeys.opencode.messages(sessionId) });
                 queryClient.invalidateQueries({ queryKey: queryKeys.opencode.diffs(sessionId) });
+                queryClient.invalidateQueries({ queryKey: ['opencode', 'forms', sessionId] });
                 setHiddenFallback((previous) => ({ ...previous, [request.id]: true }));
               }}
               onDismiss={async () => {

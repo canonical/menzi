@@ -209,6 +209,57 @@ describe('ChatPanel', () => {
     expect(await screen.findByText('Banana')).toBeInTheDocument();
     expect(screen.queryByText(/not valid JSON|unexpected character/i)).not.toBeInTheDocument();
   });
+
+  it('submits fallback answers to form reply endpoints', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? 'GET';
+        calls.push(`${method} ${url}`);
+        if (url.includes('/message') && method === 'GET') {
+          return Promise.resolve(
+            jsonResponse(200, [
+              {
+                info: { id: 'm1', sessionID: SESSION, role: 'assistant' },
+                parts: [
+                  {
+                    type: 'tool',
+                    id: 'frm_1',
+                    callID: 'frm_1',
+                    tool: 'question',
+                    state: {
+                      status: 'running',
+                      input: {
+                        questions: [
+                          {
+                            question: 'Which fruit would you like to choose?',
+                            options: [{ label: 'Banana' }, { label: 'Apple' }],
+                          },
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            ]),
+          );
+        }
+        if (url.includes('/session/') && url.includes('/form/') && url.endsWith('/reply') && method === 'POST') {
+          return Promise.resolve(jsonResponse(204, null));
+        }
+        if (url.includes('/form')) return Promise.resolve(new Response('not json', { status: 200 }));
+        return Promise.resolve(jsonResponse(404, { error: 'no route' }));
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<ChatPanel sessionId={SESSION} />);
+    await user.click(await screen.findByRole('radio', { name: /Banana/ }));
+    await user.click(screen.getByRole('button', { name: S.questions.submitOne }));
+    expect(calls.some((call) => call.includes('POST /session/ses_abc123/form/frm_1/reply'))).toBe(true);
+    expect(calls.some((call) => call.includes('POST /session/ses_abc123/message'))).toBe(false);
+  });
 });
 
 describe('Composer', () => {
