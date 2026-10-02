@@ -138,7 +138,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
             })}
           </ul>
         </DataState>
-          {formsError && pending.length > 0 ? (
+          {formsError ? (
             <div role="alert">
               <p>{getErrorMessage(formsError)}</p>
               <Button onClick={() => refetchForms()}>{S.questions.retry}</Button>
