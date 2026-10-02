@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Chip } from '@canonical/react-components';
+import { Button, Select, Spinner } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
 import { workspaceFilePatch, workspaceTreeChanges, type TreeDiff } from '../../lib/api/workspaces';
 import { getErrorMessage } from '../../lib/api/errors';
@@ -8,14 +8,7 @@ import { queryKeys } from '../../lib/routes';
 import { DiffViewer } from './DiffViewer';
 import { S } from '../../strings/catalogue';
 
-const STATUS_APPEARANCE: Record<string, 'caution' | 'information' | 'negative' | 'positive'> = {
-  added: 'positive',
-  copied: 'information',
-  deleted: 'negative',
-  modified: 'caution',
-  renamed: 'information',
-  untracked: 'positive',
-};
+import { ReviewFileTree } from './ReviewFileTree';
 
 export function CodeReviewPanel({
   directory,
@@ -27,6 +20,8 @@ export function CodeReviewPanel({
   projectId?: string;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [mode, setMode] = useState<'auto' | 'unified' | 'split'>('auto');
+  const modeId = useId();
 
   const enabled = !!userId && !!projectId;
   const listQuery = useQuery({
@@ -56,15 +51,26 @@ export function CodeReviewPanel({
       ),
     enabled: enabled && !!active,
     retry: false,
+    refetchInterval: 15000,
   });
 
   const change = patchQuery.data?.changes.find((entry) => entry.file === active?.file) ?? active;
   const patch = change?.patch ?? '';
-  const head = listQuery.data?.head ?? patchQuery.data?.head ?? '';
+  const activeIndex = changes.findIndex((entry) => entry.file === active?.file);
+  const totals = changes.reduce(
+    (sum, entry) => ({ additions: sum.additions + entry.additions, deletions: sum.deletions + entry.deletions }),
+    { additions: 0, deletions: 0 },
+  );
 
   return (
-    <section className="app-review">
-      <h2 className="app-panel-heading">{S.review.title}</h2>
+    <section className="app-review" aria-label={S.review.title}>
+      <div className="app-review__toolbar">
+        <span>{S.review.filesCount.replace('{count}', String(changes.length))}</span>
+        <span className="app-review__file-counts">
+          <span className="app-review__count--added">+{totals.additions}</span>
+          <span className="app-review__count--removed">-{totals.deletions}</span>
+        </span>
+      </div>
 
       <DataState
         loading={listQuery.isLoading}
@@ -76,97 +82,79 @@ export function CodeReviewPanel({
         onRetry={() => listQuery.refetch()}
       >
         <div className="app-review__panes">
-          <ul className="app-review__files" aria-label={S.review.filesLabel}>
-            {changes.map((entry) => (
-              <FileRow
-                key={entry.file}
-                file={entry.file}
-                additions={entry.additions}
-                deletions={entry.deletions}
-                status={entry.status}
-                active={entry.file === active?.file}
-                onSelect={() => setSelected(entry.file)}
-              />
-            ))}
-          </ul>
+          <ReviewFileTree
+            files={changes.map((entry) => entry.file)}
+            selected={active?.file ?? null}
+            onSelect={setSelected}
+          />
 
           <div className="app-review__viewer">
-            {change && patch ? (
-              <>
-                <div className="app-review__viewer-header">
-                  <h3 className="p-heading--5 u-no-margin--bottom">{change.file}</h3>
-                  <Chip
-                    value={`+${change.additions} -${change.deletions}`}
-                    appearance={change.additions > 0 ? 'positive' : 'information'}
-                    isReadOnly
-                    isDense
-                  />
+            <div className="app-review__viewer-header">
+              <div className="app-review__file-heading">
+                <h3 className="p-heading--5 u-no-margin--bottom">{active?.file}</h3>
+                <span className="app-review__file-counts">
+                  <span className="app-review__count--added">+{change?.additions ?? 0}</span>
+                  <span className="app-review__count--removed">-{change?.deletions ?? 0}</span>
+                </span>
+              </div>
+              <div className="app-review__controls">
+                <Button
+                  appearance="base"
+                  className="u-no-margin--bottom"
+                  disabled={activeIndex <= 0}
+                  onClick={() => setSelected(changes[activeIndex - 1].file)}
+                >
+                  {S.review.previousFile}
+                </Button>
+                <span aria-live="polite">
+                  {S.review.filePosition.replace('{current}', String(activeIndex + 1)).replace('{total}', String(changes.length))}
+                </span>
+                <Button
+                  appearance="base"
+                  className="u-no-margin--bottom"
+                  disabled={activeIndex >= changes.length - 1}
+                  onClick={() => setSelected(changes[activeIndex + 1].file)}
+                >
+                  {S.review.nextFile}
+                </Button>
+                <Select
+                  id={modeId}
+                  label={S.review.viewMode}
+                  labelClassName="u-off-screen"
+                  wrapperClassName="app-review__mode"
+                  value={mode}
+                  onChange={(event) => setMode(event.target.value as typeof mode)}
+                  options={[
+                    { value: 'auto', label: S.review.autoView },
+                    { value: 'unified', label: S.review.unifiedView },
+                    { value: 'split', label: S.review.splitView },
+                  ]}
+                />
+              </div>
+            </div>
+            <div className="app-review__content" key={active?.file}>
+              {patchQuery.isLoading && !patch ? (
+                <div role="status"><Spinner text={S.review.patchLoading} /></div>
+              ) : patchQuery.error ? (
+                <div role="alert">
+                  <p>{getErrorMessage(patchQuery.error)}</p>
+                  <Button onClick={() => patchQuery.refetch()}>{S.dataState.retry}</Button>
                 </div>
-                {change.truncated ? (
-                  <p className="p-form-validation__message">{S.review.patchTruncated}</p>
-                ) : null}
-                <DiffViewer file={change.file} patch={patch} />
-              </>
-            ) : change?.binary ? (
-              <p className="u-no-margin--bottom">{S.review.binaryFile}</p>
-            ) : (
-              <p className="u-no-margin--bottom">{S.review.noPatch}</p>
-            )}
+              ) : change?.binary ? (
+                <p>{S.review.binaryFile}</p>
+              ) : change && patch ? (
+                <>
+                  {change.truncated ? <p className="p-form-validation__message">{S.review.patchTruncated}</p> : null}
+                  <DiffViewer file={change.file} patch={patch} mode={mode} wrapLines />
+                </>
+              ) : (
+                <p>{S.review.noPatch}</p>
+              )}
+            </div>
           </div>
         </div>
-        <p className="app-review__base" data-testid="review-base">
-          {head ? S.review.againstHead.replace('{head}', head.slice(0, 12)) : ''}
-        </p>
       </DataState>
     </section>
-  );
-}
-
-function FileRow({
-  file,
-  additions,
-  deletions,
-  status,
-  active,
-  onSelect,
-}: {
-  file: string;
-  additions: number;
-  deletions: number;
-  status: string;
-  active: boolean;
-  onSelect: () => void;
-}) {
-  const slash = file.lastIndexOf('/');
-  const base = slash === -1 ? file : file.slice(slash + 1);
-  const directory = slash === -1 ? '' : file.slice(0, slash);
-
-  return (
-    <li>
-      <Button
-        className="app-review__file"
-        aria-label={file}
-        aria-current={active ? 'true' : undefined}
-        onClick={onSelect}
-      >
-        <span className="app-review__file-row">
-          <span className="app-review__file-base">{base}</span>
-          <span className="app-review__file-counts">
-            <span className="app-review__count app-review__count--added">+{additions}</span>
-            <span className="app-review__count app-review__count--removed">-{deletions}</span>
-          </span>
-        </span>
-        <span className="app-review__file-row">
-          <span className="app-review__file-dir">{directory || S.review.repositoryRoot}</span>
-          <Chip
-            value={status}
-            appearance={STATUS_APPEARANCE[status] ?? 'information'}
-            isReadOnly
-            isDense
-          />
-        </span>
-      </Button>
-    </li>
   );
 }
 

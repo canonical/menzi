@@ -59,7 +59,7 @@ function renderPanel() {
 }
 
 function list() {
-  return within(screen.getByRole('list', { name: S.review.filesLabel }));
+  return within(screen.getByRole('tree', { name: S.review.filesLabel }));
 }
 
 beforeEach(() => {
@@ -74,20 +74,25 @@ describe('CodeReviewPanel from git', () => {
     });
     renderPanel();
 
-    await waitFor(() => expect(list().getAllByRole('button')).toHaveLength(2));
-    expect(list().getByRole('button', { name: 'src/a.rs' })).toBeInTheDocument();
-    expect(list().getByRole('button', { name: 'src/b.rs' })).toBeInTheDocument();
+    await screen.findByRole('treeitem', { name: 'src/a.rs' });
+    expect(list().getAllByRole('treeitem').filter((item) => item.hasAttribute('aria-selected'))).toHaveLength(2);
+    expect(list().getByRole('treeitem', { name: 'src/a.rs' })).toBeInTheDocument();
+    expect(list().getByRole('treeitem', { name: 'src/b.rs' })).toBeInTheDocument();
+    expect(screen.getByText(S.review.filesCount.replace('{count}', '2'))).toBeInTheDocument();
+    expect(screen.queryByText(S.review.title)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('review-base')).not.toBeInTheDocument();
   });
 
-  it('shows the status git gave each file', async () => {
+  it('shows a compact filename without counts and status', async () => {
     mockDiff({
       'src/new.rs': change({ file: 'src/new.rs', status: 'untracked', additions: 4 }),
     });
     renderPanel();
 
-    const row = await screen.findByRole('button', { name: 'src/new.rs' });
-    expect(row.textContent).toContain('untracked');
-    expect(row.textContent).toContain('+4');
+    const row = await screen.findByRole('treeitem', { name: 'src/new.rs' });
+    expect(row.textContent).toContain('new.rs');
+    expect(row.textContent).not.toContain('untracked');
+    expect(row.textContent).not.toContain('+4');
   });
 
   it('never asks the session proxy for a diff', async () => {
@@ -142,12 +147,14 @@ describe('CodeReviewPanel from git', () => {
     expect(await screen.findByText(S.review.patchTruncated)).toBeInTheDocument();
   });
 
-  it('names the commit it is comparing against', async () => {
+  it('keeps only the change summary in the panel header', async () => {
     mockDiff({ 'src/a.rs': change({ patch: PATCH }) });
     renderPanel();
 
-    const base = await screen.findByTestId('review-base');
-    expect(base.textContent).toContain(HEAD.slice(0, 12));
+    await screen.findByTestId('diff-viewer');
+    expect(screen.getByText(S.review.filesCount.replace('{count}', '1'))).toBeInTheDocument();
+    expect(screen.queryByText(S.review.title)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('review-base')).not.toBeInTheDocument();
   });
 
   it('switches the viewer when another file is picked', async () => {
@@ -159,11 +166,72 @@ describe('CodeReviewPanel from git', () => {
     renderPanel();
 
     await screen.findByTestId('diff-viewer');
-    await user.click(list().getByRole('button', { name: 'src/b.rs' }));
+    await user.click(list().getByRole('treeitem', { name: 'src/b.rs' }));
 
     await waitFor(() => {
       expect(screen.getByTestId('diff-viewer').textContent).toContain('+y');
     });
+  });
+
+  it('keeps the file navigator visible while navigating between files', async () => {
+    mockDiff({
+      'src/a.rs': change({ patch: PATCH }),
+      'src/b.rs': change({ file: 'src/b.rs', patch: '@@ -1,1 +1,1 @@\n-old\n+new' }),
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('diff-viewer');
+    expect(screen.getByRole('button', { name: S.review.previousFile })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('tree', { name: S.review.filesLabel })).toBeVisible();
+    expect(screen.queryByRole('button', { name: S.review.hideFiles })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: S.review.nextFile }));
+    await waitFor(() => expect(screen.getByTestId('diff-viewer')).toHaveAttribute('aria-label', 'src/b.rs'));
+    expect(screen.getByRole('button', { name: S.review.nextFile })).toHaveAttribute('aria-disabled', 'true');
+    await user.click(screen.getByRole('button', { name: S.review.previousFile }));
+    await waitFor(() => expect(screen.getByTestId('diff-viewer')).toHaveAttribute('aria-label', 'src/a.rs'));
+    expect(screen.getByRole('tree', { name: S.review.filesLabel })).toBeVisible();
+  });
+
+  it('allows changing diff mode and always wraps lines', async () => {
+    mockDiff({ 'src/a.rs': change({ patch: PATCH }) });
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('diff-viewer');
+    await user.selectOptions(screen.getByRole('combobox', { name: S.review.viewMode }), 'split');
+    expect(screen.getByTestId('diff-viewer')).toHaveClass('app-diff--split');
+    await user.selectOptions(screen.getByRole('combobox', { name: S.review.viewMode }), 'unified');
+    expect(screen.getByTestId('diff-viewer')).toHaveClass('app-diff--unified');
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.getByTestId('diff-viewer')).toHaveClass('app-diff--wrap');
+  });
+
+  it('shows a patch loading state instead of an empty patch', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.searchParams.has('path')) return new Promise(() => {});
+      return Promise.resolve(json({ head: HEAD, changes: [change()] }));
+    }));
+    renderPanel();
+    expect(await screen.findByText(S.review.patchLoading)).toBeInTheDocument();
+    expect(screen.queryByText(S.review.noPatch)).not.toBeInTheDocument();
+  });
+
+  it('retries a failed patch request', async () => {
+    let failed = true;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.searchParams.has('path') && failed) {
+        return Promise.resolve({ ...json({ error: { message: 'patch failed' } }), ok: false, status: 500 });
+      }
+      return Promise.resolve(json({ head: HEAD, changes: [change({ patch: url.searchParams.has('path') ? PATCH : '' })] }));
+    }));
+    const user = userEvent.setup();
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('patch failed'));
+    expect(screen.queryByText(S.review.noPatch)).not.toBeInTheDocument();
+    failed = false;
+    await user.click(screen.getByRole('button', { name: S.dataState.retry }));
+    expect(await screen.findByTestId('diff-viewer')).toBeInTheDocument();
   });
 
   it('shows the empty state when git reports nothing', async () => {
