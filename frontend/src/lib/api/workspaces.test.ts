@@ -12,6 +12,8 @@ import {
   runWorkspaceCommand,
   startWorkspace,
   suspendWorkspace,
+  workspaceFilePatch,
+  workspaceTreeChanges,
   WorkspaceNotFoundError,
 } from './workspaces';
 
@@ -180,5 +182,26 @@ describe('workspaces api', () => {
     );
     const result = await runWorkspaceCommand('u1', 'p1', { command: 'sleep', timeout_secs: 1 });
     expect(result.timed_out).toBe(true);
+  });
+
+  it('lists tree changes with a directory query and keeps the version', async () => {
+    const fetchMock = mockFetch(200, {
+      head: 'abc123',
+      version: 'v1',
+      changes: [{ file: 'src/a.rs', additions: 1, deletions: 1, status: 'modified', binary: false, truncated: false, patch: '' }],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const diff = await workspaceTreeChanges('u1', 'p1', '/workspace');
+    expect(diff.version).toBe('v1');
+    const request = await lastRequest(fetchMock);
+    expect(request.url).toBe('/api/v1/workspaces/u1/p1/diff?directory=%2Fworkspace');
+  });
+
+  it('requests a file patch for a specific diff version', async () => {
+    const fetchMock = mockFetch(200, { head: 'abc123', version: 'v2', changes: [] });
+    vi.stubGlobal('fetch', fetchMock);
+    await workspaceFilePatch('u1', 'p1', '/workspace', 'src/a.rs', 'v2');
+    const request = await lastRequest(fetchMock);
+    expect(request.url).toBe('/api/v1/workspaces/u1/p1/diff?path=src%2Fa.rs&directory=%2Fworkspace&version=v2');
   });
 });
