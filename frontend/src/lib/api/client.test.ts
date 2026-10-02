@@ -145,6 +145,38 @@ describe('api client', () => {
     await expect(http.get('/api/demo')).rejects.toMatchObject({ status: 403, message: 'forbidden route', code: 'auth/forbidden' })
   })
 
+  it('summarizes HTML timeout pages into a compact message', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 524,
+        statusText: 'A timeout occurred',
+        text: async () => '<!DOCTYPE html><html><head><title>site | 524: A timeout occurred</title></head><body>Error code 524</body></html>',
+      }),
+    )
+    await expect(http.get('/api/demo')).rejects.toMatchObject({
+      status: 524,
+      message: 'Request timed out (524). Please try again.',
+    })
+  })
+
+  it('treats non-json success responses as ApiError with a compact message', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => '<!DOCTYPE html><html><body>gateway</body></html>',
+      }),
+    )
+    await expect(http.get('/api/demo')).rejects.toMatchObject({
+      status: 200,
+      message: 'OK',
+    })
+  })
+
   it('reads the flat error string used by the previews and projects services', async () => {
     vi.stubGlobal(
       'fetch',

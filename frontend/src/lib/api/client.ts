@@ -17,6 +17,23 @@ interface ApiErrorBody {
   code?: string;
 }
 
+function trimText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function friendlyErrorText(status: number, statusText: string, raw: string): string {
+  const text = raw.trim();
+  if (!text) return statusText || `Request failed (${status})`;
+  const htmlLike = /<!doctype html|<html\b|<head\b|<body\b/i.test(text);
+  if (htmlLike) {
+    if (/error code\s*524|\b524\b/i.test(text)) {
+      return 'Request timed out (524). Please try again.';
+    }
+    return statusText || `Request failed (${status})`;
+  }
+  return trimText(text);
+}
+
 export function readCookie(name: string): string | null {
   if (typeof document === 'undefined') return null;
   for (const part of document.cookie.split(';')) {
@@ -38,7 +55,7 @@ async function parseError(response: Response): Promise<ApiError> {
       message = nested?.message ?? flat ?? body.message ?? message;
       code = nested?.code ?? body.code;
     } catch {
-      message = text;
+      message = friendlyErrorText(response.status, response.statusText, text);
     }
   }
   return new ApiError(response.status, message, code);
@@ -88,8 +105,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (response.status === 204) {
     return undefined as T;
   }
-
-  return response.json();
+  const text = await response.text();
+  if (!text.trim()) return undefined as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new ApiError(
+      response.status,
+      friendlyErrorText(response.status, response.statusText, text),
+    );
+  }
 }
 
 export const http = {
