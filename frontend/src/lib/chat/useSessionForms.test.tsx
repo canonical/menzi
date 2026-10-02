@@ -43,4 +43,16 @@ describe('useSessionForms', () => {
     await waitFor(() => expect(result.current.pending).toHaveLength(0));
     expect(result.current.forms[0].state?.status).toBe('answered');
   });
+
+  it('keeps forms with camel case session id alias', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [
+        { id: 'frm_1', sessionId: 'ses_1', title: 'Database', fields: [{ key: 'db', type: 'string' }] },
+        { id: 'frm_2', sessionId: 'ses_other', title: 'Other', fields: [{ key: 'db', type: 'string' }] },
+      ],
+    }))));
+    const { result } = setup();
+    await waitFor(() => expect(result.current.forms).toHaveLength(1));
+    expect(result.current.forms[0].id).toBe('frm_1');
+  });
 });

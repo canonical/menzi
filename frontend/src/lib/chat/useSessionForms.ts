@@ -1,13 +1,21 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cancelForm, formsKey, getForm, listForms, replyToForm, type FormAnswer, type QuestionForm } from '../api/forms';
 
+function formSessionId(form: QuestionForm): string {
+  if (typeof form.sessionID === 'string' && form.sessionID.length > 0) return form.sessionID;
+  const fallback = form as QuestionForm & { sessionId?: string; session_id?: string };
+  if (typeof fallback.sessionId === 'string' && fallback.sessionId.length > 0) return fallback.sessionId;
+  if (typeof fallback.session_id === 'string' && fallback.session_id.length > 0) return fallback.session_id;
+  return '';
+}
+
 export function useSessionForms(sessionId: string) {
   const client = useQueryClient();
   const key = formsKey(sessionId);
   const query = useQuery({
     queryKey: key,
     queryFn: async () => {
-      const pending = (await listForms(sessionId)).filter((form) => form.sessionID === sessionId);
+      const pending = (await listForms(sessionId)).filter((form) => formSessionId(form) === sessionId);
       const previous = client.getQueryData<QuestionForm[]>(key) ?? [];
       const missing = previous.filter((form) => !pending.some((entry) => entry.id === form.id));
       const settled = await Promise.all(missing.map(async (form) => {
@@ -18,7 +26,7 @@ export function useSessionForms(sessionId: string) {
           return form;
         }
       }));
-      const merged = [...settled, ...pending].filter((form) => form.sessionID === sessionId);
+      const merged = [...settled, ...pending].filter((form) => formSessionId(form) === sessionId);
       const latest = client.getQueryData<QuestionForm[]>(key) ?? [];
       return merged.map((form) => {
         const existing = latest.find((entry) => entry.id === form.id);
