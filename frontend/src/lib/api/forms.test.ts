@@ -9,7 +9,7 @@ describe('forms API', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [form] })));
     vi.stubGlobal('fetch', fetchMock);
     expect(await listForms('ses_1')).toEqual([form]);
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/session/ses_1/form');
+    expect(fetchMock.mock.calls[0][0]).toBe('/session/ses_1/form');
     expect(fetchMock.mock.calls[0][1].headers.get('Authorization')).toMatch(/^Bearer /);
   });
 
@@ -71,7 +71,7 @@ describe('forms API', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal('fetch', fetchMock);
     await replyToForm('ses_1', 'frm_1', { db: 'pg', auth: ['email', 'github'] });
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/session/ses_1/form/frm_1/reply');
+    expect(fetchMock.mock.calls[0][0]).toBe('/session/ses_1/form/frm_1/reply');
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ answer: { db: 'pg', auth: ['email', 'github'] } });
   });
 });

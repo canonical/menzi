@@ -170,7 +170,7 @@ function normaliseForm(value: unknown): QuestionForm | null {
 }
 
 export async function listForms(sessionId: string): Promise<QuestionForm[]> {
-  const response = await http.get<unknown>(`/api/session/${encodeURIComponent(sessionId)}/form`);
+  const response = await http.get<unknown>(`/session/${encodeURIComponent(sessionId)}/form`);
   const forms = unwrapData(response);
   if (!Array.isArray(forms)) return [];
   return forms
@@ -179,16 +179,16 @@ export async function listForms(sessionId: string): Promise<QuestionForm[]> {
 }
 
 export async function getForm(sessionId: string, formId: string): Promise<QuestionForm> {
-  const response = await http.get<unknown>(`/api/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}`);
+  const response = await http.get<unknown>(`/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}`);
   const form = normaliseForm(unwrapData(response));
   if (!form) throw new Error('Invalid form response');
   return form;
 }
 
 export async function cancelForm(sessionId: string, formId: string): Promise<void> {
-  await http.delete(`/api/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}`);
+  await http.delete(`/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}`);
 }
 
 export async function replyToForm(sessionId: string, formId: string, answer: FormAnswer): Promise<void> {
-  await http.post(`/api/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}/reply`, { answer });
+  await http.post(`/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}/reply`, { answer });
 }
