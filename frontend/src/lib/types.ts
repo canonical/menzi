@@ -48,6 +48,7 @@ export interface Workspace {
 
 export interface WorkspaceSession {
   id: string;
+  parentID?: string | null;
   title?: string | null;
   directory?: string | null;
   time?: { created?: number; updated?: number };
