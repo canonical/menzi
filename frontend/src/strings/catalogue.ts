@@ -333,6 +333,22 @@ export const S = {
     changes: 'Changes',
     expandReview: 'Hide conversation and expand code review',
     splitReview: 'Show chat beside code review',
+    showTerminal: 'Show the terminal panel',
+    hideTerminal: 'Hide the terminal panel',
+  },
+  terminal: {
+    title: 'Terminal',
+    inputLabel: 'Command',
+    run: 'Run',
+    placeholder: 'Type a command',
+    output: 'Terminal output',
+    disconnected: 'Terminal is unavailable.',
+    status: {
+      open: 'Open',
+      running: 'Running',
+      closed: 'Closed',
+      error: 'Error',
+    },
   },
   chat: {
     title: 'Conversation',

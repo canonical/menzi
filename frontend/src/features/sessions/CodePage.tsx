@@ -10,6 +10,7 @@ import { useAuthStore } from '../../stores/auth';
 import { ChatPanel } from './ChatPanel';
 import { CodeReviewPanel } from './CodeReviewPanel';
 import { Composer } from './Composer';
+import { TerminalPanel } from './TerminalPanel';
 import { Unavailable } from '../../components/Unavailable';
 import { WorkspaceStatus } from '../workspaces/WorkspaceStatus';
 import { blockReason } from '../workspaces/reasons';
@@ -71,9 +72,18 @@ export function CodePage() {
   );
 
   const panel = searchParams.get('panel');
+  const terminalOpen = searchParams.get('terminal') === '1';
   const reviewOpen = panel === REVIEW_PANEL || panel === 'review-full';
-  const layout = !reviewOpen ? 'chat' : panel === 'review-full' ? 'review' : 'split';
-  const [reviewMounted, setReviewMounted] = useState(reviewOpen);
+  const sideOpen = reviewOpen || terminalOpen;
+  const layout = !sideOpen ? 'chat' : panel === 'review-full' ? 'review' : 'split';
+  const sideMode: 'review' | 'terminal' | 'both' = reviewOpen && terminalOpen
+    ? 'both'
+    : reviewOpen
+      ? 'review'
+      : 'terminal';
+  const [splitRatio, setSplitRatio] = useState(55);
+  const [dragging, setDragging] = useState(false);
+  const sideSplitRef = useRef<HTMLDivElement>(null);
   const reviewButtonRef = useRef<HTMLButtonElement>(null);
   const changesQuery = useQuery({
     queryKey: queryKeys.workspaces.diff(userId ?? '', projectId ?? '', activeDirectory ?? ''),
@@ -90,13 +100,57 @@ export function CodePage() {
     const next = new URLSearchParams(searchParams);
     if (nextLayout === 'chat') {
       next.delete('panel');
+      next.delete('terminal');
       reviewButtonRef.current?.focus();
     } else {
-      setReviewMounted(true);
-      next.set('panel', nextLayout === 'review' ? 'review-full' : REVIEW_PANEL);
+      if (!sideOpen) next.set('panel', REVIEW_PANEL);
+      if (next.get('panel') === null) next.set('panel', REVIEW_PANEL);
+      if (nextLayout === 'review') next.set('panel', 'review-full');
+      if (nextLayout === 'split' && next.get('panel') === 'review-full') next.set('panel', REVIEW_PANEL);
     }
     setSearchParams(next);
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, sideOpen]);
+
+  const toggleReview = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    if (reviewOpen) {
+      next.delete('panel');
+      if (!terminalOpen) next.delete('terminal');
+    } else {
+      next.set('panel', REVIEW_PANEL);
+    }
+    setSearchParams(next);
+  }, [reviewOpen, searchParams, setSearchParams, terminalOpen]);
+
+  const toggleTerminal = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    if (terminalOpen) {
+      next.delete('terminal');
+      if (!reviewOpen) next.delete('panel');
+    } else {
+      next.set('terminal', '1');
+    }
+    setSearchParams(next);
+  }, [reviewOpen, searchParams, setSearchParams, terminalOpen]);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (event: MouseEvent) => {
+      const container = sideSplitRef.current;
+      if (!container) return;
+      const box = container.getBoundingClientRect();
+      if (box.height <= 0) return;
+      const next = Math.min(80, Math.max(20, ((event.clientY - box.top) / box.height) * 100));
+      setSplitRatio(next);
+    };
+    const onUp = () => setDragging(false);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [dragging]);
 
   const { pending } = useSessionForms(active);
   const pendingId = pending[0]?.id;
@@ -157,25 +211,40 @@ export function CodePage() {
           >
             <Icon name="plus" />
           </Button>
-          <Button
-            ref={reviewButtonRef}
-            appearance="base"
+            <Button
+              ref={reviewButtonRef}
+              appearance="base"
             className="app-code-header__button"
-            aria-pressed={reviewOpen}
-            aria-controls="code-review-panel"
-            aria-label={reviewOpen ? S.code.hideReview : S.code.showReview}
-            title={reviewOpen ? S.code.hideReview : `${S.code.changes}${changeCount !== null ? ` · ${changeCount}` : ''}`}
-            disabled={!active}
-            onClick={() => setLayout(reviewOpen ? 'chat' : 'split')}
-          >
-            <svg className="app-code__review-toggle-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <rect x="2.5" y="3.5" width="15" height="13" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M11.5 4v12" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M12 4h4a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-4z" fill="currentColor" opacity={reviewOpen ? 0.5 : 0.2} />
-            </svg>
-          </Button>
+              aria-pressed={reviewOpen}
+              aria-controls="code-review-panel"
+              aria-label={reviewOpen ? S.code.hideReview : S.code.showReview}
+              title={reviewOpen ? S.code.hideReview : `${S.code.changes}${changeCount !== null ? ` · ${changeCount}` : ''}`}
+              disabled={!active}
+              onClick={toggleReview}
+            >
+              <svg className="app-code__header-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M4.5 3.5h11a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1z" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M6.5 7.25h7M6.5 10h7M6.5 12.75h4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                <path d="M14.4 12.8l2 2M12 13.9a2.1 2.1 0 1 0 0-4.2 2.1 2.1 0 0 0 0 4.2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </Button>
+            <Button
+              appearance="base"
+              className="app-code-header__button"
+              aria-pressed={terminalOpen}
+              aria-controls="code-terminal-panel"
+              aria-label={terminalOpen ? S.code.hideTerminal : S.code.showTerminal}
+              title={terminalOpen ? S.code.hideTerminal : S.code.showTerminal}
+              disabled={!active}
+              onClick={toggleTerminal}
+            >
+              <svg className="app-code__header-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <rect x="2.75" y="3.75" width="14.5" height="12.5" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M5.75 8.25L8.5 10l-2.75 1.75M9.75 12h4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </Button>
+          </div>
         </div>
-      </div>
 
       <WorkspaceStatus state={workspaceState} onRetry={workspaceState.retry} />
 
@@ -199,7 +268,7 @@ export function CodePage() {
             <div
               className="app-split app-split--animated"
               data-testid="code-split"
-              data-review={reviewOpen ? 'open' : 'closed'}
+              data-review={sideOpen ? 'open' : 'closed'}
               data-layout={layout}
             >
               <div
@@ -212,7 +281,7 @@ export function CodePage() {
                 {pending.length > 0 ? <p className="app-question__composer-hint">{S.questions.composerHint}</p> : null}
                 <Composer sessionId={active} />
               </div>
-              <div className="app-code__divider" aria-hidden={!reviewOpen} inert={!reviewOpen}>
+              <div className="app-code__divider" aria-hidden={!sideOpen} inert={!sideOpen}>
                 <Button
                   appearance="base"
                   className="app-code__panel-control"
@@ -224,15 +293,45 @@ export function CodePage() {
                   <Icon name="chevron" className={layout === 'review' ? 'app-code__arrow--right' : 'app-code__arrow--left'} />
                 </Button>
               </div>
-              <div className="app-code__review" id="code-review-panel" inert={!reviewOpen} aria-hidden={!reviewOpen}>
-                {reviewMounted || reviewOpen ? (
-                  <CodeReviewPanel
-                    key={`${userId}:${projectId}:${activeDirectory ?? ''}`}
-                    directory={activeDirectory}
-                    userId={userId}
-                    projectId={projectId}
-                  />
-                ) : null}
+              <div className="app-code__review" id="code-review-panel" inert={!sideOpen} aria-hidden={!sideOpen}>
+                <div
+                  className="app-side-panel"
+                >
+                  <div
+                    className="app-side-panel__split"
+                    ref={sideSplitRef}
+                    data-mode={sideMode}
+                    style={sideMode === 'both'
+                      ? { gridTemplateRows: `minmax(8rem, ${splitRatio}fr) 0.5rem minmax(8rem, ${100 - splitRatio}fr)` }
+                      : undefined}
+                  >
+                    {sideMode === 'review' || sideMode === 'both' ? (
+                      <div>
+                        <CodeReviewPanel
+                          key={`${userId}:${projectId}:${activeDirectory ?? ''}`}
+                          directory={activeDirectory}
+                          userId={userId}
+                          projectId={projectId}
+                        />
+                      </div>
+                    ) : null}
+                    {sideMode === 'both' ? (
+                      <div
+                        className="app-side-panel__divider"
+                        role="separator"
+                        aria-orientation="horizontal"
+                        onMouseDown={() => {
+                          setDragging(true);
+                        }}
+                      />
+                    ) : null}
+                    {sideMode === 'terminal' || sideMode === 'both' ? (
+                      <div id="code-terminal-panel">
+                        <TerminalPanel userId={userId} projectId={projectId} open={terminalOpen} />
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             </div>
           ) : (
