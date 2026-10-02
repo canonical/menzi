@@ -152,7 +152,7 @@ describe('ChatPanel', () => {
     expect(screen.queryByRole('button', { name: S.chat.jumpToLatest })).not.toBeInTheDocument();
   });
 
-  it('shows a forms error even when no pending form is loaded', async () => {
+  it('does not show a global error when forms polling fails without a question', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) => {
@@ -163,7 +163,8 @@ describe('ChatPanel', () => {
       }),
     );
     renderWithClient(<ChatPanel sessionId={SESSION} />);
-    expect(await screen.findByText('forms unavailable')).toBeInTheDocument();
+    await screen.findByText('Added GET /health returning ok.');
+    expect(screen.queryByText('forms unavailable')).not.toBeInTheDocument();
   });
 
   it('renders a fallback question card from a running question tool call', async () => {

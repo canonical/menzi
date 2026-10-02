@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
 import { listMessages, sendPrompt } from '../../lib/api/opencode';
-import { getErrorMessage } from '../../lib/api/errors';
 import { queryKeys } from '../../lib/routes';
 import { useStickyScroll } from '../../hooks/useStickyScroll';
 import {
@@ -199,7 +198,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
   );
 
   const working = isWorking(messagesQuery.data?.messages ?? []);
-  const { forms, pending, submit, dismiss, error: formsError, refetch: refetchForms } = useSessionForms(sessionId);
+  const { forms, pending, submit, dismiss } = useSessionForms(sessionId);
   const [hiddenFallback, setHiddenFallback] = useState<Record<string, true>>({});
   const fallback = useMemo(() => fallbackForms(messagesQuery.data, sessionId), [messagesQuery.data, sessionId]);
   const visibleFallback = forms.length === 0
@@ -257,12 +256,6 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
             })}
           </ul>
         </DataState>
-          {formsError && visibleFallback.length === 0 ? (
-            <div role="alert">
-              <p>{getErrorMessage(formsError)}</p>
-              <Button onClick={() => refetchForms()}>{S.questions.retry}</Button>
-            </div>
-          ) : null}
           {forms.map((request) => (
             <QuestionCard key={request.id} request={request} onSubmit={(answer) => submit(request, answer)} onDismiss={() => dismiss(request)} />
           ))}
