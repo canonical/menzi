@@ -12,7 +12,6 @@ export const routes = {
     previews: (projectId: string) => `/projects/${projectId}/previews`,
   },
   environment: (workspaceId: string) => `/workspaces/${workspaceId}/environment`,
-  inbox: () => '/inbox',
   admin: () => '/admin',
   settings: () => '/settings',
   auth: {

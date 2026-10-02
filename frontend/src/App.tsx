@@ -20,7 +20,6 @@ const EnvironmentPage = lazyPage(
 );
 const PreviewsPage = lazyPage('PreviewsPage', () => import('./features/previews/PreviewsPage'));
 const DesignPage = lazyPage('DesignPage', () => import('./features/design/DesignPage'));
-const InboxPage = lazyPage('InboxPage', () => import('./features/inbox/InboxPage'));
 const AdminPage = lazyPage('AdminPage', () => import('./features/admin/AdminPage'));
 const SettingsPage = lazyPage('SettingsPage', () => import('./features/settings/SettingsPage'));
 const NotFoundPage = lazyPage('NotFoundPage', () => import('./features/notfound/NotFoundPage'));
@@ -96,7 +95,6 @@ function App() {
               element={<EnvironmentPage />}
             />
             <Route path="/projects/:projectId/previews" element={<PreviewsPage />} />
-            <Route path="/inbox" element={<InboxPage />} />
             <Route path="/admin" element={<AdminPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<NotFoundPage />} />
