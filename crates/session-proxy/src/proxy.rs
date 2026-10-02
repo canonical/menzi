@@ -1,16 +1,24 @@
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use futures_util::StreamExt;
+use futures_util::SinkExt;
 use menzi_common::ids::SessionId;
 use serde_json::json;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 use tokio::sync::{broadcast, RwLock};
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use crate::auth;
 use crate::config::ProxyConfig;
@@ -34,6 +42,7 @@ pub struct ProxyState {
     pub sequence: Arc<AtomicI64>,
     pub events: broadcast::Sender<TunnelMessage>,
     pub router: Arc<dyn SessionRouter>,
+    pub ptys: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl ProxyState {
@@ -52,6 +61,7 @@ impl ProxyState {
             sequence: Arc::new(AtomicI64::new(0)),
             events,
             router: Arc::new(InMemorySessionRouter::new()),
+            ptys: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -100,6 +110,7 @@ pub fn create_router(state: ProxyState) -> Router {
         .route("/api/oc/event", get(stream_upstream_event))
         .route("/api/tunnel/{session_id}/status", get(tunnel_status))
         .route("/api/tunnel/{session_id}/fanout", post(fanout_subscribe))
+        .route("/api/pty/{pty_id}/connect", get(connect_pty))
         .route(
             "/api/tunnel/{session_id}/transcript",
             get(transcript_events),
@@ -419,6 +430,55 @@ fn not_found() -> Response {
         .into_response()
 }
 
+fn pty_id_from_path(path: &str) -> Option<String> {
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("api"), Some("pty"), Some(id)) if id.starts_with("pty") => Some(id.to_string()),
+        _ => None,
+    }
+}
+
+fn ws_target(target: &str) -> String {
+    if let Some(rest) = target.strip_prefix("https://") {
+        return format!("wss://{rest}");
+    }
+    if let Some(rest) = target.strip_prefix("http://") {
+        return format!("ws://{rest}");
+    }
+    target.to_string()
+}
+
+fn remember_pty(state: &ProxyState, pty_id: &str, endpoint: &str) {
+    state
+        .ptys
+        .lock()
+        .expect("pty route lock")
+        .insert(pty_id.to_string(), endpoint.to_string());
+}
+
+fn remove_pty(state: &ProxyState, pty_id: &str) {
+    state.ptys.lock().expect("pty route lock").remove(pty_id);
+}
+
+fn pty_target(state: &ProxyState, pty_id: &str) -> Option<String> {
+    state
+        .ptys
+        .lock()
+        .expect("pty route lock")
+        .get(pty_id)
+        .cloned()
+}
+
+fn pty_id_from_response(bytes: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    value
+        .get("data")
+        .and_then(|data| data.get("id"))
+        .and_then(|id| id.as_str())
+        .map(str::to_string)
+        .filter(|id| id.starts_with("pty"))
+}
+
 async fn forward(
     State(state): State<ProxyState>,
     method: Method,
@@ -443,9 +503,14 @@ async fn forward(
     let capability_session = session_hint(uri.path(), query.as_deref());
     let session = path_session.clone().or(capability_session.clone());
 
-    let target = match endpoint_override(&headers) {
+    let override_target = endpoint_override(&headers);
+    let mapped_pty_target = pty_id_from_path(uri.path()).and_then(|pty_id| pty_target(&state, &pty_id));
+
+    let target = match override_target.clone() {
         Some(override_endpoint) => override_endpoint,
-        None => match (
+        None => match mapped_pty_target {
+            Some(mapped) => mapped,
+            None => match (
             session,
             is_capability_path(uri.path()),
             path_session.is_some(),
@@ -460,7 +525,7 @@ async fn forward(
             },
             (None, _, true) => return not_found(),
             (None, _, false) => state.fallback().await,
-        },
+        }},
     };
 
     let path_and_query = uri
@@ -469,7 +534,7 @@ async fn forward(
         .unwrap_or(uri.path());
     let url = format!("{target}{path_and_query}");
 
-    let mut builder = state.http.request(method, url);
+    let mut builder = state.http.request(method.clone(), url);
     for (name, value) in auth::strip_identity(&headers).iter() {
         if name == header::HOST
             || name == header::CONTENT_LENGTH
@@ -522,7 +587,124 @@ async fn forward(
         header::CONTENT_LENGTH,
         HeaderValue::from_str(&bytes.len().to_string()).expect("valid content length"),
     );
+
+    if method == Method::POST && uri.path() == "/api/pty" && status.is_success() {
+        if let Some(pty_id) = pty_id_from_response(&bytes) {
+            remember_pty(&state, &pty_id, &target);
+        }
+    }
+
+    if let Some(pty_id) = pty_id_from_path(uri.path()) {
+        if status.is_success() {
+            if let Some(override_endpoint) = override_target {
+                remember_pty(&state, &pty_id, &override_endpoint);
+            }
+            if method == Method::DELETE {
+                remove_pty(&state, &pty_id);
+            }
+        }
+    }
+
     response
+}
+
+async fn connect_pty(
+    State(state): State<ProxyState>,
+    Path(pty_id): Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if !state.config.is_allowed("GET", uri.path()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "route not allowed"})),
+        )
+            .into_response();
+    }
+    let target = if let Some(override_endpoint) = endpoint_override(&headers) {
+        remember_pty(&state, &pty_id, &override_endpoint);
+        override_endpoint
+    } else if let Some(mapped) = pty_target(&state, &pty_id) {
+        mapped
+    } else {
+        return not_found();
+    };
+    let upstream = format!("{}{}", ws_target(&target), uri.path_and_query().map(|v| v.as_str()).unwrap_or(uri.path()));
+    let credentials = upstream_credentials();
+
+    ws.on_upgrade(move |socket| async move {
+        proxy_websocket(socket, upstream, credentials).await;
+    })
+    .into_response()
+}
+
+async fn proxy_websocket(
+    mut downstream: WebSocket,
+    upstream_url: String,
+    credentials: Option<(String, String)>,
+) {
+    let mut request = match upstream_url.clone().into_client_request() {
+        Ok(request) => request,
+        Err(_) => {
+            let _ = downstream.close().await;
+            return;
+        }
+    };
+    if let Some((username, password)) = credentials {
+        let token = BASE64.encode(format!("{username}:{password}"));
+        if let Ok(value) = HeaderValue::from_str(&format!("Basic {token}")) {
+            request.headers_mut().insert(header::AUTHORIZATION, value);
+        }
+    }
+
+    let Ok((upstream, _)) = connect_async(request).await else {
+        let _ = downstream.close().await;
+        return;
+    };
+    let (mut upstream_sink, mut upstream_stream) = upstream.split();
+    let (mut downstream_sink, mut downstream_stream) = downstream.split();
+
+    let to_upstream = async {
+        while let Some(message) = downstream_stream.next().await {
+            let Ok(message) = message else { break };
+            let mapped = match message {
+                Message::Text(text) => UpstreamMessage::Text(text.to_string()),
+                Message::Binary(data) => UpstreamMessage::Binary(data.to_vec()),
+                Message::Ping(data) => UpstreamMessage::Ping(data.to_vec()),
+                Message::Pong(data) => UpstreamMessage::Pong(data.to_vec()),
+                Message::Close(_) => {
+                    let _ = upstream_sink.send(UpstreamMessage::Close(None)).await;
+                    break;
+                }
+            };
+            if upstream_sink.send(mapped).await.is_err() {
+                break;
+            }
+        }
+    };
+
+    let to_downstream = async {
+        while let Some(message) = upstream_stream.next().await {
+            let Ok(message) = message else { break };
+            let mapped = match message {
+                UpstreamMessage::Text(text) => Message::Text(text.to_string().into()),
+                UpstreamMessage::Binary(data) => Message::Binary(data.into()),
+                UpstreamMessage::Ping(data) => Message::Ping(data.into()),
+                UpstreamMessage::Pong(data) => Message::Pong(data.into()),
+                UpstreamMessage::Close(_) => Message::Close(None),
+                UpstreamMessage::Frame(_) => continue,
+            };
+            if downstream_sink.send(mapped).await.is_err() {
+                break;
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = to_upstream => {}
+        _ = to_downstream => {}
+    }
 }
 
 fn record_event(

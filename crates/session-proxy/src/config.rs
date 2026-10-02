@@ -45,7 +45,12 @@ impl ProxyConfig {
                 "POST /api/session/:id/switchModel".to_string(),
                 "POST /api/session/:id/switchAgent".to_string(),
                 "GET /api/fs/*".to_string(),
+                "GET /api/pty".to_string(),
+                "POST /api/pty".to_string(),
+                "GET /api/pty/*".to_string(),
                 "POST /api/pty/*".to_string(),
+                "PUT /api/pty/*".to_string(),
+                "DELETE /api/pty/*".to_string(),
                 "GET /api/config".to_string(),
             ],
             deny_list: vec![

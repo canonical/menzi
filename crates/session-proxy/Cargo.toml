@@ -20,6 +20,8 @@ reqwest.workspace = true
 async-trait.workspace = true
 clap.workspace = true
 futures-util.workspace = true
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+base64.workspace = true
 
 [dev-dependencies]
 tower.workspace = true
