@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { eventStreamFor, toSessionEvent, type SessionEvent } from '../api/events';
 import { queryKeys } from '../routes';
+import { formsKey } from '../api/forms';
 import type { MessageInfo, MessagePart, OpencodeMessage, ToolPart, ToolState } from '../types';
 
 interface CacheShape {
@@ -99,7 +100,12 @@ export function useSessionStream(sessionId: string | null): void {
       if (stopped) return;
       let event = null;
       try {
-        event = toSessionEvent(JSON.parse(raw.data) as Record<string, unknown>);
+        const payload = JSON.parse(raw.data) as Record<string, unknown>;
+        const type = typeof payload.type === 'string' ? payload.type : '';
+        if (type.startsWith('form.') || type.includes('.form.') || type === 'location.shutdown') {
+          queryClient.invalidateQueries({ queryKey: formsKey(sessionId) });
+        }
+        event = toSessionEvent(payload);
       } catch {
         event = null;
       }
