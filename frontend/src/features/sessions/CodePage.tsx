@@ -1,9 +1,9 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { Button, EmptyState, Icon, Tabs, useNotify } from '@canonical/react-components';
 import { getErrorMessage } from '../../lib/api/errors';
-import { openWorkspaceSession, listWorkspaceSessions } from '../../lib/api/workspaces';
+import { openWorkspaceSession, listWorkspaceSessions, workspaceTreeChanges } from '../../lib/api/workspaces';
 import { queryKeys } from '../../lib/routes';
 import { formatDateTime } from '../../lib/format/time';
 import { useAuthStore } from '../../stores/auth';
@@ -15,6 +15,7 @@ import { WorkspaceStatus } from '../workspaces/WorkspaceStatus';
 import { blockReason } from '../workspaces/reasons';
 import { useWorkspace } from '../workspaces/useWorkspace';
 import { S } from '../../strings/catalogue';
+import { useSessionForms } from '../../lib/chat/useSessionForms';
 
 const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9]+$/;
 
@@ -57,7 +58,7 @@ export function CodePage() {
   });
 
   const requested = searchParams.get('session') ?? '';
-  const sessions = sessionsQuery.data ?? [];
+  const sessions = (sessionsQuery.data ?? []).filter((session) => !session.parentID);
   const known = sessions.some((session) => session.id === requested);
   const active = requested && (known || SESSION_ID_PATTERN.test(requested)) ? requested : '';
   const activeDirectory = sessions.find((session) => session.id === active)?.directory ?? undefined;
@@ -69,17 +70,42 @@ export function CodePage() {
     [setSearchParams],
   );
 
-  const reviewOpen = searchParams.get('panel') === REVIEW_PANEL;
+  const panel = searchParams.get('panel');
+  const reviewOpen = panel === REVIEW_PANEL || panel === 'review-full';
+  const layout = !reviewOpen ? 'chat' : panel === 'review-full' ? 'review' : 'split';
+  const [reviewMounted, setReviewMounted] = useState(reviewOpen);
+  const reviewButtonRef = useRef<HTMLButtonElement>(null);
+  const changesQuery = useQuery({
+    queryKey: queryKeys.workspaces.diff(userId ?? '', projectId ?? '', activeDirectory ?? ''),
+    queryFn: () => workspaceTreeChanges(userId as string, projectId as string, activeDirectory),
+    enabled: !!userId && !!projectId && !!active && workspaceState.canStartSession,
+    retry: false,
+    refetchInterval: 15000,
+  });
+  const changeCount = Array.isArray(changesQuery.data?.changes)
+    ? changesQuery.data.changes.length
+    : null;
 
-  const toggleReview = useCallback(() => {
+  const setLayout = useCallback((nextLayout: 'chat' | 'split' | 'review') => {
     const next = new URLSearchParams(searchParams);
-    if (reviewOpen) {
+    if (nextLayout === 'chat') {
       next.delete('panel');
+      reviewButtonRef.current?.focus();
     } else {
-      next.set('panel', REVIEW_PANEL);
+      setReviewMounted(true);
+      next.set('panel', nextLayout === 'review' ? 'review-full' : REVIEW_PANEL);
     }
     setSearchParams(next);
-  }, [reviewOpen, searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams]);
+
+  const { pending } = useSessionForms(active);
+  const pendingId = pending[0]?.id;
+  const revealedQuestion = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingId || revealedQuestion.current === pendingId) return;
+    revealedQuestion.current = pendingId;
+    if (layout === 'review') setLayout('split');
+  }, [pendingId, layout, setLayout]);
 
   const startSession = useCallback(async () => {
     const session = await openWorkspaceSession(
@@ -115,26 +141,38 @@ export function CodePage() {
 
   return (
     <div className="app-code">
-      <div className="app-page-header app-page-header--compact">
+      <div className="app-code-header">
         <h1 className="u-off-screen">{S.sections.code}</h1>
-        <div className="app-page-header__actions">
+        <div className="app-code-header__tabs">
+          {tabs.length > 0 ? <Tabs links={tabs} /> : null}
+        </div>
+        <div className="app-code-header__actions">
           <Button
-            appearance="positive"
+            appearance="base"
+            className="app-code-header__button"
+            aria-label={S.code.newSession}
+            title={S.code.newSession}
             disabled={!canStart}
             onClick={() => startPending.mutate()}
           >
             <Icon name="plus" />
-            {S.code.newSession}
           </Button>
           <Button
+            ref={reviewButtonRef}
             appearance="base"
-            className="u-no-margin--bottom"
+            className="app-code-header__button"
             aria-pressed={reviewOpen}
             aria-controls="code-review-panel"
             aria-label={reviewOpen ? S.code.hideReview : S.code.showReview}
-            onClick={toggleReview}
+            title={reviewOpen ? S.code.hideReview : `${S.code.changes}${changeCount !== null ? ` · ${changeCount}` : ''}`}
+            disabled={!active}
+            onClick={() => setLayout(reviewOpen ? 'chat' : 'split')}
           >
-            <Icon name="file-blank" />
+            <svg className="app-code__review-toggle-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <rect x="2.5" y="3.5" width="15" height="13" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M11.5 4v12" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M12 4h4a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-4z" fill="currentColor" opacity={reviewOpen ? 0.5 : 0.2} />
+            </svg>
           </Button>
         </div>
       </div>
@@ -157,26 +195,45 @@ export function CodePage() {
         </EmptyState>
       ) : (
         <>
-          <Tabs links={tabs} />
           {active ? (
             <div
-              className={`app-split${reviewOpen ? ' app-split--review' : ''}`}
+              className="app-split app-split--animated"
               data-testid="code-split"
               data-review={reviewOpen ? 'open' : 'closed'}
+              data-layout={layout}
             >
-              <div className="app-code__chat">
+              <div
+                className="app-code__chat"
+                id="code-conversation-panel"
+                inert={layout === 'review'}
+                aria-hidden={layout === 'review'}
+              >
                 <ChatPanel sessionId={active} />
+                {pending.length > 0 ? <p className="app-question__composer-hint">{S.questions.composerHint}</p> : null}
                 <Composer sessionId={active} />
               </div>
-              {reviewOpen ? (
-                <div className="app-code__review" id="code-review-panel">
+              <div className="app-code__divider" aria-hidden={!reviewOpen} inert={!reviewOpen}>
+                <Button
+                  appearance="base"
+                  className="app-code__panel-control"
+                  aria-label={layout === 'review' ? S.code.splitReview : S.code.expandReview}
+                  title={layout === 'review' ? S.code.splitReview : S.code.expandReview}
+                  aria-controls="code-conversation-panel code-review-panel"
+                  onClick={() => setLayout(layout === 'review' ? 'split' : 'review')}
+                >
+                  <Icon name="chevron" className={layout === 'review' ? 'app-code__arrow--right' : 'app-code__arrow--left'} />
+                </Button>
+              </div>
+              <div className="app-code__review" id="code-review-panel" inert={!reviewOpen} aria-hidden={!reviewOpen}>
+                {reviewMounted || reviewOpen ? (
                   <CodeReviewPanel
-                  directory={activeDirectory}
-                  userId={userId}
-                  projectId={projectId}
-                />
-                </div>
-              ) : null}
+                    key={`${userId}:${projectId}:${activeDirectory ?? ''}`}
+                    directory={activeDirectory}
+                    userId={userId}
+                    projectId={projectId}
+                  />
+                ) : null}
+              </div>
             </div>
           ) : (
             <EmptyState title={S.code.pickTitle} image={<Icon name="quote" />}>

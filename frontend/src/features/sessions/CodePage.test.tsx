@@ -49,11 +49,13 @@ function workspace(status: WorkspaceStatus, lastError: string | null = null): Wo
 
 interface MockOptions {
   workspace?: Workspace | 'none' | 'missing' | 'forbidden';
-  sessions?: { id: string; title?: string; time?: { updated?: number } }[];
+  sessions?: { id: string; title?: string; parentID?: string; time?: { updated?: number } }[];
+  changes?: { file: string; additions: number; deletions: number; status: string; patch: string }[];
+  forms?: import('../../lib/api/forms').QuestionForm[];
 }
 
 function mockApi(options: MockOptions = {}) {
-  const { workspace: workspaceState = workspace('ready'), sessions = [] } = options;
+  const { workspace: workspaceState = workspace('ready'), sessions = [], changes = [], forms = [] } = options;
   const calls: string[] = [];
 
   vi.stubGlobal(
@@ -72,6 +74,8 @@ function mockApi(options: MockOptions = {}) {
           jsonResponse(200, workspaceState === 'none' ? null : workspace('provisioning')),
         );
       }
+      if (url.includes('/form')) return Promise.resolve(jsonResponse(200, { data: forms }));
+      if (url.includes('/diff')) return Promise.resolve(jsonResponse(200, { head: 'abc123', changes }));
       if (url.includes(`/api/v1/workspaces/${USER_ID}/${PROJECT_ID}`)) {
         if (workspaceState === 'missing') {
           return Promise.resolve(jsonResponse(404, { error: 'not found' }));
@@ -85,7 +89,6 @@ function mockApi(options: MockOptions = {}) {
         return Promise.resolve(jsonResponse(200, MESSAGES));
       }
       if (url.includes('/vcs/status')) return Promise.resolve(jsonResponse(200, { data: [] }));
-      if (url.includes('/diff')) return Promise.resolve(jsonResponse(200, { data: [] }));
       if (url.includes('/api/model')) {
         return Promise.resolve(
           jsonResponse(200, { data: [{ id: 'space-bunny-free', providerID: 'opencode' }] }),
@@ -196,20 +199,63 @@ describe('CodePage', () => {
     await screen.findByText('hello agent');
     await user.click(screen.getByRole('button', { name: S.code.showReview }));
 
-    expect(await screen.findByText(S.review.title)).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: S.review.title })).toBeInTheDocument();
     expect(screen.getByTestId('code-split')).toHaveAttribute('data-review', 'open');
-    expect(screen.getByRole('button', { name: S.code.hideReview })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-layout', 'split');
+    expect(screen.getByText('hello agent')).toBeVisible();
+    expect(screen.getByRole('button', { name: S.code.expandReview })).toBeInTheDocument();
   });
 
   it('opens the review panel straight from a shared link', async () => {
     mockApi({ sessions: [{ id: SESSION_A, time: { updated: 1790000000000 } }] });
     renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}&panel=review`);
 
-    expect(await screen.findByText(S.review.title)).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: S.review.title })).toBeInTheDocument();
     expect(screen.getByTestId('code-split')).toHaveAttribute('data-review', 'open');
+  });
+
+  it('hides only the conversation when expanding review and keeps changed files', async () => {
+    mockApi({
+      sessions: [{ id: SESSION_A }],
+      changes: [{ file: 'src/main.ts', additions: 1, deletions: 1, status: 'modified', patch: '@@ -1 +1 @@\n-old\n+new' }],
+    });
+    const user = userEvent.setup();
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}&panel=review`);
+    const files = await screen.findByRole('tree', { name: S.review.filesLabel });
+    expect(files).toBeVisible();
+    await user.click(screen.getByRole('button', { name: S.code.expandReview }));
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-layout', 'review');
+    expect(document.getElementById('code-conversation-panel')).toHaveAttribute('aria-hidden', 'true');
+    expect(document.getElementById('code-conversation-panel')).toHaveAttribute('inert');
+    expect(files).toBeVisible();
+    expect(screen.getByRole('treeitem', { name: 'src/main.ts' })).toBeVisible();
+    expect(document.getElementById('code-review-panel')).toHaveAttribute('aria-hidden', 'false');
+    await user.click(screen.getByRole('button', { name: S.code.splitReview }));
+    expect(document.getElementById('code-conversation-panel')).toHaveAttribute('aria-hidden', 'false');
+    expect(files).toBeVisible();
+  });
+
+  it('reveals the conversation when a question is pending and preserves drafts across layouts', async () => {
+    mockApi({ sessions: [{ id: SESSION_A }], forms: [{ id: 'frm_1', sessionID: SESSION_A, title: 'How should errors appear?', fields: [{ key: 'behavior', type: 'string' }] }] });
+    const user = userEvent.setup();
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}&panel=review-full`);
+    await screen.findByRole('form', { name: S.questions.needed });
+    await waitFor(() => expect(screen.getByTestId('code-split')).toHaveAttribute('data-layout', 'split'));
+    expect(screen.getByText(S.questions.waiting)).toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: 'How should errors appear?' }), 'Show a retry');
+    await user.click(screen.getByRole('button', { name: S.code.expandReview }));
+    await user.click(screen.getByRole('button', { name: S.code.splitReview }));
+    expect(screen.getByRole('textbox', { name: 'How should errors appear?' })).toHaveValue('Show a retry');
+  });
+
+  it('restores full review from a shared link and can return to split view', async () => {
+    mockApi({ sessions: [{ id: SESSION_A }] });
+    const user = userEvent.setup();
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}&panel=review-full`);
+    expect(await screen.findByRole('region', { name: S.review.title })).toBeInTheDocument();
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-layout', 'review');
+    await user.click(screen.getByRole('button', { name: S.code.splitReview }));
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-layout', 'split');
   });
 
   it('closes the review panel again and returns the chat to the full page', async () => {
@@ -217,11 +263,11 @@ describe('CodePage', () => {
     const user = userEvent.setup();
     renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}&panel=review`);
 
-    await screen.findByText(S.review.title);
+    await screen.findByRole('region', { name: S.review.title });
     await user.click(screen.getByRole('button', { name: S.code.hideReview }));
 
     await waitFor(() => {
-      expect(screen.queryByText(S.review.title)).not.toBeInTheDocument();
+      expect(document.getElementById('code-review-panel')).toHaveAttribute('aria-hidden', 'true');
     });
     expect(screen.getByTestId('code-split')).toHaveAttribute('data-review', 'closed');
   });
@@ -234,10 +280,39 @@ describe('CodePage', () => {
     await screen.findByText('hello agent');
     await user.click(screen.getByRole('button', { name: S.code.showReview }));
 
-    expect(await screen.findByText('hello agent')).toBeInTheDocument();
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-layout', 'split');
+    await user.click(screen.getByRole('button', { name: S.code.expandReview }));
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-layout', 'review');
+    expect(document.getElementById('code-conversation-panel')).toHaveAttribute('inert');
+    await user.click(screen.getByRole('button', { name: S.code.splitReview }));
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-layout', 'split');
+    expect(document.getElementById('code-conversation-panel')).not.toHaveAttribute('inert');
+    await user.click(screen.getByRole('button', { name: S.code.expandReview }));
+    await user.click(screen.getByRole('button', { name: S.code.hideReview }));
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-layout', 'chat');
+    expect(screen.getByRole('button', { name: S.code.showReview })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: S.code.showReview }));
+    expect(screen.getByTestId('code-split')).toHaveAttribute('data-layout', 'split');
     expect(
       screen.getByRole('tab', { name: new RegExp(SESSION_A.replace('ses_', '').slice(0, 8)) }),
     ).toBeInTheDocument();
+  });
+
+  it('puts session tabs and icon actions in one header and excludes subagents', async () => {
+    mockApi({ sessions: [
+      { id: SESSION_A, title: 'Main session' },
+      { id: SESSION_B, title: 'Other session' },
+      { id: 'ses_child123', title: 'Explore subagent', parentID: SESSION_A },
+    ] });
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}`);
+    await screen.findByRole('tab', { name: 'Main session' });
+    expect(screen.getByRole('tab', { name: 'Other session' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Explore subagent' })).not.toBeInTheDocument();
+    const header = document.querySelector('.app-code-header');
+    expect(header).toContainElement(screen.getByRole('tab', { name: 'Main session' }));
+    expect(header).toContainElement(screen.getByRole('button', { name: S.code.newSession }));
+    expect(screen.getByRole('button', { name: S.code.newSession })).toHaveTextContent('');
+    expect(header).toContainElement(screen.getByRole('button', { name: S.code.showReview }));
   });
 
   it('labels a tab with its title when it has one', async () => {

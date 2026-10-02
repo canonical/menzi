@@ -23,6 +23,8 @@ import { CompactionMarker, ThinkingBlock } from './chat/ThinkingBlock';
 import { WorkingLabel } from './WorkingLabel';
 import { Markdown } from './Markdown';
 import { S } from '../../strings/catalogue';
+import { useSessionForms } from '../../lib/chat/useSessionForms';
+import { QuestionCard } from './chat/QuestionCard';
 
 function errorText(info: MessageInfo): string {
   if (!info.error) return '';
@@ -83,6 +85,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
   );
 
   const working = isWorking(messagesQuery.data?.messages ?? []);
+  const { forms, pending, submit, dismiss, error: formsError, refetch: refetchForms } = useSessionForms(sessionId);
 
   // Streamed parts grow the transcript without changing this component's props,
   // so follow the bottom after every render rather than on a message count.
@@ -134,12 +137,21 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
               );
             })}
           </ul>
-          {working ? (
+        </DataState>
+          {formsError && pending.length > 0 ? (
+            <div role="alert">
+              <p>{getErrorMessage(formsError)}</p>
+              <Button onClick={() => refetchForms()}>{S.questions.retry}</Button>
+            </div>
+          ) : null}
+          {forms.map((request) => (
+            <QuestionCard key={request.id} request={request} onSubmit={(answer) => submit(request, answer)} onDismiss={() => dismiss(request)} />
+          ))}
+          {pending.length > 0 ? <p role="status" className="app-chat-working">{S.questions.waiting}</p> : working ? (
             <div className="app-chat-working">
               <WorkingLabel />
             </div>
           ) : null}
-        </DataState>
       </div>
       {stuck ? null : (
         <Button
