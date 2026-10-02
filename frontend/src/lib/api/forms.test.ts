@@ -14,9 +14,57 @@ describe('forms API', () => {
   });
 
   it('reads settled forms', async () => {
-    const form = { id: 'frm_1', state: { status: 'answered', answer: { db: 'pg' } } };
+    const form = { id: 'frm_1', sessionID: 'ses_1', title: 'Database', fields: [{ key: 'db', type: 'string' }], state: { status: 'answered', answer: { db: 'pg' } } };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: form }))));
     expect(await getForm('ses_1', 'frm_1')).toEqual(form);
+  });
+
+  it('accepts raw list payloads and session id aliases', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify([
+            {
+              id: 'frm_1',
+              sessionId: 'ses_1',
+              title: 'Database',
+              fields: [{ key: 'db', type: 'string' }],
+            },
+          ]),
+        ),
+      ),
+    );
+    expect(await listForms('ses_1')).toEqual([
+      {
+        id: 'frm_1',
+        sessionID: 'ses_1',
+        title: 'Database',
+        fields: [{ key: 'db', type: 'string' }],
+      },
+    ]);
+  });
+
+  it('accepts raw form payloads', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: 'frm_1',
+            session_id: 'ses_1',
+            title: 'Database',
+            fields: [{ key: 'db', type: 'string' }],
+          }),
+        ),
+      ),
+    );
+    expect(await getForm('ses_1', 'frm_1')).toEqual({
+      id: 'frm_1',
+      sessionID: 'ses_1',
+      title: 'Database',
+      fields: [{ key: 'db', type: 'string' }],
+    });
   });
 
   it('replies with keyed answers and handles no content', async () => {
