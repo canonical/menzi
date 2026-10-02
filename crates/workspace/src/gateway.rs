@@ -175,7 +175,11 @@ impl OpencodeGateway for HttpOpencodeGateway {
             .ok_or_else(|| {
                 MenziError::Gateway("opencode session list is not a list".to_string())
             })?;
-        Ok(list.iter().filter_map(session_from).collect())
+        Ok(list
+            .iter()
+            .filter(|session| session.get("parentID").and_then(|value| value.as_str()).is_none())
+            .filter_map(session_from)
+            .collect())
     }
 }
 

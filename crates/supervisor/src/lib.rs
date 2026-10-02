@@ -90,23 +90,11 @@ pub async fn run(config: &menzi_common::config::Config) -> Result<()> {
 }
 
 fn default_permissions() -> Vec<PermissionRule> {
-    vec![
-        PermissionRule {
-            action: "shell".to_string(),
-            resource: "*".to_string(),
-            effect: "ask".to_string(),
-        },
-        PermissionRule {
-            action: "edit".to_string(),
-            resource: "*".to_string(),
-            effect: "allow".to_string(),
-        },
-        PermissionRule {
-            action: "network".to_string(),
-            resource: "*".to_string(),
-            effect: "ask".to_string(),
-        },
-    ]
+    vec![PermissionRule {
+        action: "*".to_string(),
+        resource: "*".to_string(),
+        effect: "allow".to_string(),
+    }]
 }
 
 pub fn heartbeat_payload(session_id: SessionId, status: &str) -> Heartbeat {
@@ -127,12 +115,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_permissions_cover_shell_edit_network() {
+    fn default_permissions_allow_all_container_tools() {
         let permissions = default_permissions();
-        assert_eq!(permissions.len(), 3);
-        assert!(permissions.iter().any(|rule| rule.action == "shell"));
-        assert!(permissions.iter().any(|rule| rule.action == "edit"));
-        assert!(permissions.iter().any(|rule| rule.action == "network"));
+        assert_eq!(permissions.len(), 1);
+        assert_eq!(permissions[0].action, "*");
+        assert_eq!(permissions[0].resource, "*");
+        assert_eq!(permissions[0].effect, "allow");
     }
 
     #[test]

@@ -29,6 +29,13 @@ impl ProxyConfig {
                 "GET /api/session/:id/log".to_string(),
                 "POST /api/session/:id/interrupt".to_string(),
                 "GET /api/session/:id/diff".to_string(),
+                "GET /session/:id/form".to_string(),
+                "GET /session/:id/form/:form_id".to_string(),
+                "POST /session/:id/form/:form_id/reply".to_string(),
+                "GET /api/session/:id/form".to_string(),
+                "GET /api/session/:id/form/:form_id".to_string(),
+                "POST /api/session/:id/form/:form_id/reply".to_string(),
+                "DELETE /api/session/:id/form/:form_id".to_string(),
                 "GET /api/vcs/status".to_string(),
                 "GET /api/vcs/diff".to_string(),
                 "GET /api/model".to_string(),
@@ -156,6 +163,15 @@ mod tests {
     fn is_allowed_returns_false_for_denied_route() {
         let config = ProxyConfig::default_allowlist();
         assert!(!config.is_allowed("POST", "/api/config"));
+    }
+
+    #[test]
+    fn allows_session_forms_without_permission_endpoints() {
+        let config = ProxyConfig::default_allowlist();
+        assert!(config.is_allowed("GET", "/api/session/ses_1/form"));
+        assert!(config.is_allowed("GET", "/api/session/ses_1/form/frm_1"));
+        assert!(config.is_allowed("POST", "/api/session/ses_1/form/frm_1/reply"));
+        assert!(!config.is_allowed("POST", "/api/session/ses_1/permission/p_1/reply"));
     }
 
     #[test]
