@@ -1,8 +1,9 @@
 use menzi_common::ids::{ProjectId, UserId, WorkspaceId};
 use menzi_common::{MenziError, Result};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
 use crate::driver::{ProvisionOutcome, WorkspaceDriver};
 use crate::gateway::OpencodeGateway;
@@ -14,6 +15,28 @@ use crate::types::{
 };
 
 const MAX_PATCH_BYTES: usize = 2 * 1024 * 1024;
+const MAX_DIFF_CACHE_ENTRIES: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DiffCacheKey {
+    workspace: WorkspaceKey,
+    repo: String,
+}
+
+#[derive(Debug, Clone)]
+struct GitState {
+    head: String,
+    version: String,
+    statuses: Vec<PorcelainEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct DiffSnapshot {
+    head: String,
+    version: String,
+    changes: Vec<TreeChange>,
+    by_file: HashMap<String, usize>,
+}
 
 pub trait WorkspaceAudit: Send + Sync {
     fn record(&self, action: &str, principal: &str, key: &WorkspaceKey, detail: &str);
@@ -34,6 +57,8 @@ pub struct WorkspaceManager {
     sessions: Arc<dyn SessionRegistry>,
     source_instance: String,
     locks: Arc<std::sync::Mutex<HashMap<WorkspaceKey, Arc<AsyncMutex<()>>>>>,
+    diff_locks: Arc<std::sync::Mutex<HashMap<DiffCacheKey, Arc<AsyncMutex<()>>>>>,
+    diff_cache: Arc<RwLock<HashMap<DiffCacheKey, Arc<AsyncMutex<DiffSnapshot>>>>>,
     health_attempts: u32,
     health_delay: std::time::Duration,
 }
@@ -53,6 +78,8 @@ impl WorkspaceManager {
             sessions: Arc::new(crate::registry::registry_noop()),
             source_instance: source_instance.into(),
             locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            diff_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            diff_cache: Arc::new(RwLock::new(HashMap::new())),
             health_attempts: 15,
             health_delay: std::time::Duration::from_secs(2),
         }
@@ -261,6 +288,7 @@ impl WorkspaceManager {
         {
             tracing::warn!("session {} was not recorded: {error}", session.id);
         }
+        self.prewarm_diff(*key, session.directory.clone());
         Ok(session)
     }
 
@@ -353,6 +381,7 @@ impl WorkspaceManager {
             workspace.updated_at = now();
             self.store.save(&workspace).await?;
         }
+        self.prewarm_diff(*key, None);
         Ok(outcome)
     }
 
@@ -375,31 +404,113 @@ impl WorkspaceManager {
         key: &WorkspaceKey,
         directory: Option<&str>,
         path: Option<&str>,
+        version: Option<&str>,
     ) -> Result<TreeDiff> {
         let instance = self.running_instance(key).await?;
         let repo = directory.unwrap_or("/workspace");
-        let head = self.head(&instance, repo).await?;
-        let statuses = porcelain(&self.status(&instance, repo).await?);
+        let cache_key = DiffCacheKey {
+            workspace: *key,
+            repo: repo.to_string(),
+        };
+        let state = self.read_git_state(&instance, repo).await?;
+        if let Some(expected) = version {
+            if expected != state.version {
+                return Err(MenziError::Conflict(format!(
+                    "stale diff version: expected {expected}, actual {}",
+                    state.version
+                )));
+            }
+        }
+        let snapshot = self
+            .snapshot_for_state(&instance, repo, cache_key, state)
+            .await?;
 
         if let Some(path) = path {
             let path = check_path(path)?;
-            let Some(entry) = statuses.into_iter().find(|entry| entry.file == path) else {
+            let mut snapshot = snapshot.lock().await;
+            let Some(&index) = snapshot.by_file.get(&path) else {
                 return Ok(TreeDiff {
-                    head,
+                    head: snapshot.head.clone(),
+                    version: snapshot.version.clone(),
                     changes: Vec::new(),
                 });
             };
-            let change = self.with_counts_and_patch(&instance, repo, entry).await?;
+            if snapshot.changes[index].patch.is_empty() && !snapshot.changes[index].binary {
+                let entry = PorcelainEntry {
+                    file: snapshot.changes[index].file.clone(),
+                    previous: snapshot.changes[index].previous.clone(),
+                    status: snapshot.changes[index].status.clone(),
+                };
+                let rebuilt = self.with_counts_and_patch(&instance, repo, entry).await?;
+                snapshot.changes[index] = rebuilt;
+            }
             return Ok(TreeDiff {
-                head,
-                changes: vec![change],
+                head: snapshot.head.clone(),
+                version: snapshot.version.clone(),
+                changes: vec![snapshot.changes[index].clone()],
             });
         }
 
+        let snapshot = snapshot.lock().await;
+        Ok(TreeDiff {
+            head: snapshot.head.clone(),
+            version: snapshot.version.clone(),
+            changes: snapshot.changes.clone(),
+        })
+    }
+
+    async fn read_git_state(&self, instance: &str, repo: &str) -> Result<GitState> {
+        let head = self.head(instance, repo).await?;
+        let raw_status = self.status(instance, repo).await?;
+        Ok(GitState {
+            version: version_of(&head, &raw_status),
+            statuses: porcelain(&raw_status),
+            head,
+        })
+    }
+
+    async fn snapshot_for_state(
+        &self,
+        instance: &str,
+        repo: &str,
+        cache_key: DiffCacheKey,
+        state: GitState,
+    ) -> Result<Arc<AsyncMutex<DiffSnapshot>>> {
+        if let Some(entry) = self.diff_cache.read().await.get(&cache_key).cloned() {
+            let snapshot = entry.lock().await;
+            if snapshot.version == state.version {
+                drop(snapshot);
+                return Ok(entry);
+            }
+        }
+        let lock = self.diff_lock_for(cache_key.clone());
+        let _guard = lock.lock().await;
+        if let Some(entry) = self.diff_cache.read().await.get(&cache_key).cloned() {
+            let snapshot = entry.lock().await;
+            if snapshot.version == state.version {
+                drop(snapshot);
+                return Ok(entry);
+            }
+        }
+        let built = Arc::new(AsyncMutex::new(
+            self.build_snapshot(instance, repo, state).await?,
+        ));
+        let mut cache = self.diff_cache.write().await;
+        cache.insert(cache_key, built.clone());
+        while cache.len() > MAX_DIFF_CACHE_ENTRIES {
+            let Some(next_key) = cache.keys().next().cloned() else {
+                break;
+            };
+            cache.remove(&next_key);
+        }
+        Ok(built)
+    }
+
+    async fn build_snapshot(&self, instance: &str, repo: &str, state: GitState) -> Result<DiffSnapshot> {
         let counts = numstat_by_file(
             &self
                 .git(
-                    &instance,
+                    instance,
                     repo,
                     vec!["diff".into(), "--numstat".into(), "HEAD".into()],
                 )
@@ -407,12 +518,28 @@ impl WorkspaceManager {
                 .unwrap_or_default(),
         );
 
-        let mut changes = Vec::with_capacity(statuses.len());
-        for entry in statuses {
-            changes.push(self.with_counts(&instance, repo, entry, &counts).await?);
+        let mut changes = Vec::with_capacity(state.statuses.len());
+        let mut by_file = HashMap::with_capacity(state.statuses.len());
+        for entry in state.statuses {
+            let next = self.with_counts(instance, repo, entry, &counts).await?;
+            by_file.insert(next.file.clone(), changes.len());
+            changes.push(next);
         }
+        Ok(DiffSnapshot {
+            head: state.head,
+            version: state.version,
+            changes,
+            by_file,
+        })
+    }
 
-        Ok(TreeDiff { head, changes })
+    fn prewarm_diff(&self, key: WorkspaceKey, directory: Option<String>) {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let _ = manager
+                .tree_changes(&key, directory.as_deref(), None, None)
+                .await;
+        });
     }
 
     async fn with_counts(
@@ -608,6 +735,7 @@ impl WorkspaceManager {
         workspace.status = WorkspaceStatus::Deleted;
         workspace.updated_at = now();
         self.store.save(&workspace).await?;
+        self.drop_diff_cache_for(*key).await;
         self.audit
             .record("destroy", principal, key, workspace.name.as_str());
         Ok(())
@@ -684,6 +812,7 @@ impl WorkspaceManager {
         workspace.last_error = Some("the container is gone".to_string());
         workspace.updated_at = now();
         if self.store.save(&workspace).await.is_ok() {
+            self.drop_diff_cache_for(*key).await;
             report.released.push(key.instance_name());
             true
         } else {
@@ -743,6 +872,7 @@ impl WorkspaceManager {
             if let Some(instance) = workspace.instance_name.clone() {
                 let _ = self.driver.destroy(&instance).await;
             }
+            self.drop_diff_cache_for(key).await;
             reaped.push(key.instance_name());
         }
         Ok(reaped)
@@ -755,12 +885,28 @@ impl WorkspaceManager {
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
             .clone()
     }
+
+    fn diff_lock_for(&self, key: DiffCacheKey) -> Arc<AsyncMutex<()>> {
+        let mut locks = self.diff_locks.lock().expect("diff locks");
+        locks
+            .entry(key)
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    }
+
+    async fn drop_diff_cache_for(&self, workspace: WorkspaceKey) {
+        self.diff_cache
+            .write()
+            .await
+            .retain(|key, _| key.workspace != workspace);
+    }
 }
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+#[derive(Debug, Clone)]
 struct PorcelainEntry {
     file: String,
     previous: Option<String>,
@@ -818,6 +964,14 @@ fn check_path(path: &str) -> Result<String> {
         )));
     }
     Ok(trimmed.to_string())
+}
+
+fn version_of(head: &str, raw_status: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(head.as_bytes());
+    hasher.update([0]);
+    hasher.update(raw_status.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 fn truncate_patch(raw: String) -> (String, bool) {
@@ -1638,11 +1792,12 @@ mod tests {
 
         let diff = h
             .manager
-            .tree_changes(&k, Some("/workspace"), None)
+            .tree_changes(&k, Some("/workspace"), None, None)
             .await
             .unwrap();
 
         assert_eq!(diff.head, "abc123");
+        assert_eq!(diff.version, version_of("abc123", " M src/a.rs\0"));
         assert_eq!(
             diff.changes
                 .iter()
@@ -1651,6 +1806,63 @@ mod tests {
             vec![("src/a.rs", 3, 1, "modified")]
         );
         assert!(diff.changes.iter().all(|c| c.patch.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn tree_changes_reuse_the_hot_snapshot_until_status_changes() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+        h.driver.answers(status_cmd(), " M src/a.rs\0");
+        h.driver.answers(numstat_all_cmd(), "3\t1\tsrc/a.rs\n");
+        h.driver.answers(head_cmd(), "abc123\n");
+
+        let first = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), None, None)
+            .await
+            .unwrap();
+        let second = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), None, Some(&first.version))
+            .await
+            .unwrap();
+
+        assert_eq!(first.version, second.version);
+        let calls = h.driver.calls.lock().unwrap();
+        let numstat_calls = calls.iter().filter(|call| call.contains("diff --numstat HEAD")).count();
+        assert_eq!(numstat_calls, 1);
+    }
+
+    #[tokio::test]
+    async fn tree_changes_reject_a_stale_version() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+        h.driver.answers(status_cmd(), " M src/a.rs\0");
+        h.driver.answers(numstat_all_cmd(), "3\t1\tsrc/a.rs\n");
+        h.driver.answers(head_cmd(), "abc123\n");
+        let first = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), None, None)
+            .await
+            .unwrap();
+
+        h.driver.answers(status_cmd(), " M src/a.rs\0 M src/b.rs\0");
+        h.driver
+            .answers(numstat_all_cmd(), "3\t1\tsrc/a.rs\n2\t0\tsrc/b.rs\n");
+
+        let stale = h
+            .manager
+            .tree_changes(&k, Some("/workspace"), Some("src/a.rs"), Some(&first.version))
+            .await;
+        assert!(matches!(stale, Err(MenziError::Conflict(_))));
     }
 
     #[tokio::test]
@@ -1671,7 +1883,7 @@ mod tests {
 
         let diff = h
             .manager
-            .tree_changes(&k, Some("/workspace"), None)
+            .tree_changes(&k, Some("/workspace"), None, None)
             .await
             .unwrap();
 
@@ -1703,7 +1915,7 @@ mod tests {
 
         let diff = h
             .manager
-            .tree_changes(&k, Some("/workspace"), Some("src/new.rs"))
+            .tree_changes(&k, Some("/workspace"), Some("src/new.rs"), None)
             .await
             .unwrap();
 
@@ -1728,7 +1940,7 @@ mod tests {
 
         let diff = h
             .manager
-            .tree_changes(&k, Some("/workspace"), None)
+            .tree_changes(&k, Some("/workspace"), None, None)
             .await
             .unwrap();
 
@@ -1751,7 +1963,7 @@ mod tests {
 
         let diff = h
             .manager
-            .tree_changes(&k, Some("/workspace"), None)
+            .tree_changes(&k, Some("/workspace"), None, None)
             .await
             .unwrap();
 
@@ -1777,7 +1989,7 @@ mod tests {
 
         let diff = h
             .manager
-            .tree_changes(&k, Some("/workspace"), Some("big.rs"))
+            .tree_changes(&k, Some("/workspace"), Some("big.rs"), None)
             .await
             .unwrap();
 
@@ -1802,7 +2014,7 @@ mod tests {
         ] {
             assert!(
                 h.manager
-                    .tree_changes(&k, Some("/workspace"), Some(path))
+                    .tree_changes(&k, Some("/workspace"), Some(path), None)
                     .await
                     .is_err(),
                 "{path} should be refused"
@@ -1820,7 +2032,7 @@ mod tests {
             .unwrap();
 
         h.manager
-            .tree_changes(&k, Some("/workspace"), None)
+            .tree_changes(&k, Some("/workspace"), None, None)
             .await
             .unwrap();
 
@@ -1851,7 +2063,7 @@ mod tests {
 
         let diff = h
             .manager
-            .tree_changes(&k, Some("/workspace"), Some("src/a.rs"))
+            .tree_changes(&k, Some("/workspace"), Some("src/a.rs"), None)
             .await
             .unwrap();
 
@@ -1876,7 +2088,7 @@ mod tests {
 
         let diff = h
             .manager
-            .tree_changes(&k, Some("/workspace"), Some("src/a.rs"))
+            .tree_changes(&k, Some("/workspace"), Some("src/a.rs"), None)
             .await
             .unwrap();
 
@@ -1892,7 +2104,7 @@ mod tests {
             .await
             .unwrap();
 
-        h.manager.tree_changes(&k, None, None).await.unwrap();
+        h.manager.tree_changes(&k, None, None, None).await.unwrap();
 
         let calls = h.driver.calls.lock().unwrap().clone();
         assert!(calls
@@ -1910,7 +2122,7 @@ mod tests {
             .unwrap();
 
         h.manager
-            .tree_changes(&k, Some("/workspace"), None)
+            .tree_changes(&k, Some("/workspace"), None, None)
             .await
             .unwrap();
 
@@ -1930,7 +2142,7 @@ mod tests {
             .await
             .unwrap();
         h.manager.destroy_workspace("p", &k).await.unwrap();
-        assert!(h.manager.tree_changes(&k, None, None).await.is_err());
+        assert!(h.manager.tree_changes(&k, None, None, None).await.is_err());
     }
 
     #[test]
