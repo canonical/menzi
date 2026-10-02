@@ -85,6 +85,12 @@ export const apiPaths = {
       `/api/v1/workspaces/${userId}/${projectId}/interrupt`,
     terminal: (userId: string, projectId: string) =>
       `/api/v1/workspaces/${userId}/${projectId}/terminal`,
+    terminalInput: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}/terminal/input`,
+    terminalResize: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}/terminal/resize`,
+    terminalOutput: (userId: string, projectId: string) =>
+      `/api/v1/workspaces/${userId}/${projectId}/terminal/output`,
     diff: (userId: string, projectId: string) =>
       `/api/v1/workspaces/${userId}/${projectId}/diff`,
     forProject: (projectId: string) => `/api/v1/projects/${projectId}/workspaces`,
@@ -127,6 +133,12 @@ export const queryKeys = {
       ['workspaces', 'diff', userId, projectId, directory] as const,
     diffPatch: (userId: string, projectId: string, directory: string, path: string, version: string) =>
       ['workspaces', 'diff', userId, projectId, directory, path, version] as const,
+    terminal: {
+      snapshot: (userId: string, projectId: string) =>
+        ['workspaces', 'terminal', userId, projectId, 'snapshot'] as const,
+      output: (userId: string, projectId: string, after: number) =>
+        ['workspaces', 'terminal', userId, projectId, 'output', after] as const,
+    },
   },
   env: {
     specs: () => ['env', 'specs'] as const,

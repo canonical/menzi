@@ -3,13 +3,17 @@ import {
   connectWorkspace,
   destroyWorkspace,
   ensureWorkspace,
+  getWorkspaceTerminal,
   getWorkspace,
   interruptWorkspaceSession,
   listWorkspaceSessions,
   listWorkspacesForProject,
   openWorkspaceSession,
   promptWorkspace,
+  readWorkspaceTerminalOutput,
+  resizeWorkspaceTerminal,
   runWorkspaceCommand,
+  sendWorkspaceTerminalInput,
   startWorkspace,
   suspendWorkspace,
   workspaceFilePatch,
@@ -182,6 +186,43 @@ describe('workspaces api', () => {
     );
     const result = await runWorkspaceCommand('u1', 'p1', { command: 'sleep', timeout_secs: 1 });
     expect(result.timed_out).toBe(true);
+  });
+
+  it('gets a persistent workspace terminal snapshot', async () => {
+    const fetchMock = mockFetch(200, { id: 'term_1', status: 'open', cwd: '/workspace', cols: 100, rows: 30, last_seq: 2, text: 'hi' });
+    vi.stubGlobal('fetch', fetchMock);
+    const snapshot = await getWorkspaceTerminal('u1', 'p1');
+    expect(snapshot.id).toBe('term_1');
+    const request = await lastRequest(fetchMock);
+    expect(request.url).toBe('/api/v1/workspaces/u1/p1/terminal');
+    expect(request.method).toBe('GET');
+  });
+
+  it('sends terminal input to the workspace terminal', async () => {
+    const fetchMock = mockFetch(200, { id: 'term_1', status: 'open', last_seq: 3, chunks: [] });
+    vi.stubGlobal('fetch', fetchMock);
+    await sendWorkspaceTerminalInput('u1', 'p1', { input: 'ls -la' });
+    const request = await lastRequest(fetchMock);
+    expect(request.url).toBe('/api/v1/workspaces/u1/p1/terminal/input');
+    expect(request.method).toBe('POST');
+    expect(request.body).toEqual({ input: 'ls -la' });
+  });
+
+  it('resizes the workspace terminal', async () => {
+    const fetchMock = mockFetch(200, { id: 'term_1', status: 'open', cwd: '/workspace', cols: 120, rows: 40, last_seq: 2, text: '' });
+    vi.stubGlobal('fetch', fetchMock);
+    await resizeWorkspaceTerminal('u1', 'p1', { cols: 120, rows: 40 });
+    const request = await lastRequest(fetchMock);
+    expect(request.url).toBe('/api/v1/workspaces/u1/p1/terminal/resize');
+    expect(request.body).toEqual({ cols: 120, rows: 40 });
+  });
+
+  it('reads terminal output after a cursor', async () => {
+    const fetchMock = mockFetch(200, { id: 'term_1', status: 'open', last_seq: 3, chunks: [] });
+    vi.stubGlobal('fetch', fetchMock);
+    await readWorkspaceTerminalOutput('u1', 'p1', 3);
+    const request = await lastRequest(fetchMock);
+    expect(request.url).toBe('/api/v1/workspaces/u1/p1/terminal/output?after=3');
   });
 
   it('lists tree changes with a directory query and keeps the version', async () => {

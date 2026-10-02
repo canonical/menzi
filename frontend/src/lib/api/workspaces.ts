@@ -1,6 +1,13 @@
 import { http } from './client';
+import { ApiError } from './errors';
 import { apiPaths } from '../routes';
-import type { PromptOutcome, Workspace, WorkspaceSession } from '../types';
+import type {
+  PromptOutcome,
+  Workspace,
+  WorkspaceSession,
+  WorkspaceTerminalOutput,
+  WorkspaceTerminalSnapshot,
+} from '../types';
 
 export interface EnsureWorkspaceInput {
   projectId: string;
@@ -21,6 +28,109 @@ export interface TerminalResult {
   stdout: string;
   stderr: string;
   timed_out: boolean;
+}
+
+export interface TerminalInputSpec {
+  input: string;
+}
+
+export interface TerminalResizeSpec {
+  cols?: number;
+  rows?: number;
+}
+
+export interface WorkspacePty {
+  id: string;
+  title: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  status: 'running' | 'exited';
+  pid: number;
+  exitCode?: number;
+  size: { rows: number; cols: number };
+}
+
+const API_BASE = import.meta.env.VITE_API_URL || '';
+const WORKSPACE_ENDPOINT_HEADER = 'x-menzi-workspace-endpoint';
+
+async function ptyRequest<T>(
+  path: string,
+  endpoint: string,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  body?: unknown,
+): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method,
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      [WORKSPACE_ENDPOINT_HEADER]: endpoint,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    let message = response.statusText || `Request failed (${response.status})`;
+    if (text.trim()) {
+      try {
+        const parsed = JSON.parse(text) as { error?: { message?: string } | string; message?: string };
+        message = typeof parsed.error === 'string'
+          ? parsed.error
+          : parsed.error?.message ?? parsed.message ?? message;
+      } catch {
+        message = text;
+      }
+    }
+    throw new ApiError(response.status, message);
+  }
+  if (!text.trim()) return undefined as T;
+  return JSON.parse(text) as T;
+}
+
+export async function listWorkspacePtys(endpoint: string): Promise<WorkspacePty[]> {
+  const response = await ptyRequest<{ data: WorkspacePty[] }>('/api/pty?location[directory]=/workspace', endpoint, 'GET');
+  return response.data ?? [];
+}
+
+export async function createWorkspacePty(
+  endpoint: string,
+  spec: { command: string; args?: string[]; cwd?: string; title: string; env?: Record<string, string> },
+): Promise<WorkspacePty> {
+  const response = await ptyRequest<{ data: WorkspacePty }>('/api/pty?location[directory]=/workspace', endpoint, 'POST', {
+    command: spec.command,
+    args: spec.args ?? [],
+    cwd: spec.cwd,
+    title: spec.title,
+    env: spec.env ?? {},
+  });
+  return response.data;
+}
+
+export async function workspacePtyConnectToken(endpoint: string, ptyId: string): Promise<string> {
+  const response = await ptyRequest<{ data: { ticket: string } }>(`/api/pty/${encodeURIComponent(ptyId)}/connect-token?location[directory]=/workspace`, endpoint, 'POST');
+  return response.data.ticket;
+}
+
+export async function resizeWorkspacePty(
+  endpoint: string,
+  ptyId: string,
+  size: { cols: number; rows: number },
+): Promise<WorkspacePty> {
+  const response = await ptyRequest<{ data: WorkspacePty }>(`/api/pty/${encodeURIComponent(ptyId)}?location[directory]=/workspace`, endpoint, 'PUT', {
+    size: { cols: size.cols, rows: size.rows },
+  });
+  return response.data;
+}
+
+export function workspacePtySocketUrl(ptyId: string, ticket?: string): string {
+  const base = (import.meta.env.VITE_API_URL || '').trim();
+  const origin = base ? new URL(base, window.location.origin).origin : window.location.origin;
+  const protocol = origin.startsWith('https://') ? 'wss://' : 'ws://';
+  const host = origin.replace(/^https?:\/\//, '');
+  const query = new URLSearchParams({ 'location[directory]': '/workspace' });
+  if (ticket) query.set('ticket', ticket);
+  return `${protocol}${host}/api/pty/${encodeURIComponent(ptyId)}/connect?${query.toString()}`;
 }
 
 export class WorkspaceNotFoundError extends Error {
@@ -164,6 +274,37 @@ export async function runWorkspaceCommand(
   spec: TerminalSpec,
 ): Promise<TerminalResult> {
   return http.post<TerminalResult>(apiPaths.workspaces.terminal(userId, projectId), spec);
+}
+
+export async function getWorkspaceTerminal(
+  userId: string,
+  projectId: string,
+): Promise<WorkspaceTerminalSnapshot> {
+  return http.get<WorkspaceTerminalSnapshot>(apiPaths.workspaces.terminal(userId, projectId));
+}
+
+export async function sendWorkspaceTerminalInput(
+  userId: string,
+  projectId: string,
+  spec: TerminalInputSpec,
+): Promise<WorkspaceTerminalOutput> {
+  return http.post<WorkspaceTerminalOutput>(apiPaths.workspaces.terminalInput(userId, projectId), spec);
+}
+
+export async function resizeWorkspaceTerminal(
+  userId: string,
+  projectId: string,
+  spec: TerminalResizeSpec,
+): Promise<WorkspaceTerminalSnapshot> {
+  return http.post<WorkspaceTerminalSnapshot>(apiPaths.workspaces.terminalResize(userId, projectId), spec);
+}
+
+export async function readWorkspaceTerminalOutput(
+  userId: string,
+  projectId: string,
+  after: number,
+): Promise<WorkspaceTerminalOutput> {
+  return http.get<WorkspaceTerminalOutput>(`${apiPaths.workspaces.terminalOutput(userId, projectId)}?after=${after}`);
 }
 
 function statusOf(error: unknown): number | undefined {

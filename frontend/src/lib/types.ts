@@ -61,6 +61,31 @@ export interface PromptOutcome {
   error?: string | null;
 }
 
+export type WorkspaceTerminalStatus = 'open' | 'running' | 'closed' | 'error';
+
+export interface WorkspaceTerminalChunk {
+  seq: number;
+  stream: string;
+  text: string;
+}
+
+export interface WorkspaceTerminalSnapshot {
+  id: string;
+  status: WorkspaceTerminalStatus;
+  cwd: string;
+  cols: number;
+  rows: number;
+  last_seq: number;
+  text: string;
+}
+
+export interface WorkspaceTerminalOutput {
+  id: string;
+  status: WorkspaceTerminalStatus;
+  last_seq: number;
+  chunks: WorkspaceTerminalChunk[];
+}
+
 export interface EnvResponse<T> {
   success: boolean;
   message: string;
