@@ -10,8 +10,10 @@ use crate::gateway::OpencodeGateway;
 use crate::registry::{SessionBinding, SessionKind, SessionRegistry};
 use crate::store::WorkspaceStore;
 use crate::types::{
-    AgentSession, PromptOutcome, ReconcileReport, TerminalRequest, TerminalResult, TreeChange,
-    TreeDiff, Workspace, WorkspaceKey, WorkspaceSpec, WorkspaceStatus,
+    AgentSession, PromptOutcome, ReconcileReport, TerminalChunk, TerminalInputSpec,
+    TerminalRequest, TerminalResizeSpec, TerminalResult, TreeChange, TreeDiff, Workspace,
+    WorkspaceKey, WorkspaceSpec, WorkspaceStatus, WorkspaceTerminalOutput,
+    WorkspaceTerminalSnapshot, WorkspaceTerminalStatus,
 };
 
 const MAX_PATCH_BYTES: usize = 2 * 1024 * 1024;
@@ -59,8 +61,20 @@ pub struct WorkspaceManager {
     locks: Arc<std::sync::Mutex<HashMap<WorkspaceKey, Arc<AsyncMutex<()>>>>>,
     diff_locks: Arc<std::sync::Mutex<HashMap<DiffCacheKey, Arc<AsyncMutex<()>>>>>,
     diff_cache: Arc<RwLock<HashMap<DiffCacheKey, Arc<AsyncMutex<DiffSnapshot>>>>>,
+    terminals: Arc<RwLock<HashMap<WorkspaceKey, WorkspaceTerminal>>>,
     health_attempts: u32,
     health_delay: std::time::Duration,
+}
+
+#[derive(Debug, Clone)]
+struct WorkspaceTerminal {
+    id: String,
+    status: WorkspaceTerminalStatus,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+    seq: i64,
+    chunks: Vec<TerminalChunk>,
 }
 
 impl WorkspaceManager {
@@ -80,6 +94,7 @@ impl WorkspaceManager {
             locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             diff_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             diff_cache: Arc::new(RwLock::new(HashMap::new())),
+            terminals: Arc::new(RwLock::new(HashMap::new())),
             health_attempts: 15,
             health_delay: std::time::Duration::from_secs(2),
         }
@@ -397,6 +412,106 @@ impl WorkspaceManager {
     ) -> Result<TerminalResult> {
         let instance = self.running_instance(key).await?;
         self.driver.exec(&instance, request).await
+    }
+
+    pub async fn terminal_snapshot(&self, key: &WorkspaceKey) -> Result<WorkspaceTerminalSnapshot> {
+        self.running_instance(key).await?;
+        let terminal = self.ensure_terminal(*key).await;
+        Ok(terminal_snapshot(&terminal))
+    }
+
+    pub async fn terminal_resize(
+        &self,
+        key: &WorkspaceKey,
+        spec: &TerminalResizeSpec,
+    ) -> Result<WorkspaceTerminalSnapshot> {
+        self.running_instance(key).await?;
+        let mut terminals = self.terminals.write().await;
+        let terminal = terminals.entry(*key).or_insert_with(new_terminal);
+        if let Some(cols) = spec.cols {
+            terminal.cols = cols;
+        }
+        if let Some(rows) = spec.rows {
+            terminal.rows = rows;
+        }
+        Ok(terminal_snapshot(terminal))
+    }
+
+    pub async fn terminal_output(
+        &self,
+        key: &WorkspaceKey,
+        after: i64,
+    ) -> Result<WorkspaceTerminalOutput> {
+        self.running_instance(key).await?;
+        let terminal = self.ensure_terminal(*key).await;
+        Ok(terminal_output(&terminal, after))
+    }
+
+    pub async fn terminal_input(
+        &self,
+        key: &WorkspaceKey,
+        spec: &TerminalInputSpec,
+    ) -> Result<WorkspaceTerminalOutput> {
+        let command = spec.input.trim();
+        if command.is_empty() {
+            return self.terminal_output(key, -1).await;
+        }
+        let instance = self.running_instance(key).await?;
+        {
+            let mut terminals = self.terminals.write().await;
+            let terminal = terminals.entry(*key).or_insert_with(new_terminal);
+            terminal.status = WorkspaceTerminalStatus::Running;
+        }
+
+        let quoted = sh_quote(command);
+        let login = format!(
+            "cd /workspace && export TERM=xterm-256color && bash -ilc {}",
+            quoted
+        );
+        let as_menzi = format!("su - menzi -s /bin/bash -c {}", sh_quote(&login));
+
+        let primary = TerminalRequest::new("sh")
+            .arg("-lc")
+            .arg(as_menzi)
+            .in_dir("/workspace")
+            .timeout_secs(Some(120));
+        let fallback = TerminalRequest::new("sh")
+            .arg("-lc")
+            .arg(login)
+            .in_dir("/workspace")
+            .timeout_secs(Some(120));
+
+        let result = match self.driver.exec(&instance, &primary).await {
+            Ok(primary_result) if primary_result.exit_code == 0 => Ok(primary_result),
+            Ok(primary_result) => match self.driver.exec(&instance, &fallback).await {
+                Ok(fallback_result) => Ok(fallback_result),
+                Err(_) => Ok(primary_result),
+            },
+            Err(_) => self.driver.exec(&instance, &fallback).await,
+        };
+
+        let mut terminals = self.terminals.write().await;
+        let terminal = terminals.entry(*key).or_insert_with(new_terminal);
+        match result {
+            Ok(result) => {
+                if !result.stdout.is_empty() {
+                    append_chunk(terminal, "stdout", result.stdout);
+                }
+                if !result.stderr.is_empty() {
+                    append_chunk(terminal, "stderr", result.stderr);
+                }
+                if result.timed_out {
+                    append_chunk(terminal, "system", "command timed out\n".to_string());
+                }
+                terminal.status = WorkspaceTerminalStatus::Open;
+                Ok(terminal_output(terminal, -1))
+            }
+            Err(error) => {
+                terminal.status = WorkspaceTerminalStatus::Error;
+                append_chunk(terminal, "stderr", format!("{error}\n"));
+                Ok(terminal_output(terminal, -1))
+            }
+        }
     }
 
     pub async fn tree_changes(
@@ -735,6 +850,7 @@ impl WorkspaceManager {
         workspace.status = WorkspaceStatus::Deleted;
         workspace.updated_at = now();
         self.store.save(&workspace).await?;
+        self.terminals.write().await.remove(key);
         self.drop_diff_cache_for(*key).await;
         self.audit
             .record("destroy", principal, key, workspace.name.as_str());
@@ -812,6 +928,7 @@ impl WorkspaceManager {
         workspace.last_error = Some("the container is gone".to_string());
         workspace.updated_at = now();
         if self.store.save(&workspace).await.is_ok() {
+            self.terminals.write().await.remove(key);
             self.drop_diff_cache_for(*key).await;
             report.released.push(key.instance_name());
             true
@@ -899,6 +1016,70 @@ impl WorkspaceManager {
             .write()
             .await
             .retain(|key, _| key.workspace != workspace);
+    }
+
+    async fn ensure_terminal(&self, key: WorkspaceKey) -> WorkspaceTerminal {
+        let mut terminals = self.terminals.write().await;
+        terminals.entry(key).or_insert_with(new_terminal).clone()
+    }
+}
+
+fn new_terminal() -> WorkspaceTerminal {
+    WorkspaceTerminal {
+        id: format!("term_{}", uuid::Uuid::new_v4()),
+        status: WorkspaceTerminalStatus::Open,
+        cwd: "/workspace".to_string(),
+        cols: 100,
+        rows: 30,
+        seq: 0,
+        chunks: Vec::new(),
+    }
+}
+
+fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn append_chunk(terminal: &mut WorkspaceTerminal, stream: &str, text: String) {
+    terminal.seq += 1;
+    terminal.chunks.push(TerminalChunk {
+        seq: terminal.seq,
+        stream: stream.to_string(),
+        text,
+    });
+    if terminal.chunks.len() > 2000 {
+        let drop = terminal.chunks.len() - 2000;
+        terminal.chunks.drain(0..drop);
+    }
+}
+
+fn terminal_snapshot(terminal: &WorkspaceTerminal) -> WorkspaceTerminalSnapshot {
+    WorkspaceTerminalSnapshot {
+        id: terminal.id.clone(),
+        status: terminal.status.clone(),
+        cwd: terminal.cwd.clone(),
+        cols: terminal.cols,
+        rows: terminal.rows,
+        last_seq: terminal.seq,
+        text: terminal
+            .chunks
+            .iter()
+            .map(|chunk| chunk.text.as_str())
+            .collect::<String>(),
+    }
+}
+
+fn terminal_output(terminal: &WorkspaceTerminal, after: i64) -> WorkspaceTerminalOutput {
+    WorkspaceTerminalOutput {
+        id: terminal.id.clone(),
+        status: terminal.status.clone(),
+        last_seq: terminal.seq,
+        chunks: terminal
+            .chunks
+            .iter()
+            .filter(|chunk| chunk.seq > after)
+            .cloned()
+            .collect(),
     }
 }
 
@@ -1715,6 +1896,72 @@ mod tests {
             .unwrap()
             .iter()
             .any(|call| { call.starts_with(&format!("exec:{}", k.instance_name())) }));
+    }
+
+    #[tokio::test]
+    async fn terminal_snapshot_is_reused_for_one_workspace() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+
+        let first = h.manager.terminal_snapshot(&k).await.unwrap();
+        let second = h.manager.terminal_snapshot(&k).await.unwrap();
+        assert_eq!(first.id, second.id);
+    }
+
+    #[tokio::test]
+    async fn terminal_input_appends_output_with_cursor_reads() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+
+        let output = h
+            .manager
+            .terminal_input(
+                &k,
+                &TerminalInputSpec {
+                    input: "ls -la".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(output
+            .chunks
+            .iter()
+            .any(|chunk| chunk.text.contains("ok")));
+
+        let only_new = h.manager.terminal_output(&k, output.last_seq).await.unwrap();
+        assert_eq!(only_new.chunks.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn terminal_resize_changes_snapshot_dimensions() {
+        let h = harness();
+        let k = key(UserId::new(), ProjectId::new());
+        h.manager
+            .ensure_workspace("p", spec(k.user_id, k.project_id))
+            .await
+            .unwrap();
+
+        let resized = h
+            .manager
+            .terminal_resize(
+                &k,
+                &TerminalResizeSpec {
+                    cols: Some(120),
+                    rows: Some(40),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(resized.cols, 120);
+        assert_eq!(resized.rows, 40);
     }
 
     #[tokio::test]

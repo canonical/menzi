@@ -15,7 +15,9 @@ use crate::identity::{
 };
 use crate::manager::WorkspaceManager;
 use crate::registry::SessionKind;
-use crate::types::{TerminalSpec, WorkspaceKey, WorkspaceSpec};
+use crate::types::{
+    TerminalInputSpec, TerminalResizeSpec, TerminalSpec, WorkspaceKey, WorkspaceSpec,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnsureWorkspaceRequest {
@@ -116,7 +118,19 @@ pub fn create_router(state: WorkspaceApiState) -> axum::Router {
         )
         .route(
             "/api/v1/workspaces/{user_id}/{project_id}/terminal",
-            post(run_terminal),
+            get(terminal_snapshot).post(run_terminal),
+        )
+        .route(
+            "/api/v1/workspaces/{user_id}/{project_id}/terminal/input",
+            post(terminal_input),
+        )
+        .route(
+            "/api/v1/workspaces/{user_id}/{project_id}/terminal/resize",
+            post(terminal_resize),
+        )
+        .route(
+            "/api/v1/workspaces/{user_id}/{project_id}/terminal/output",
+            get(terminal_output),
         )
         .route(
             "/api/v1/workspaces/{user_id}/{project_id}/diff",
@@ -439,6 +453,67 @@ async fn run_terminal(
         return server_error(error);
     }
     server_result(state.manager.terminal(&key, &spec.into()).await)
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TerminalOutputQuery {
+    pub after: Option<i64>,
+}
+
+async fn terminal_snapshot(
+    State(state): State<WorkspaceApiState>,
+    Caller(caller): Caller,
+    Path((user_id, project_id)): Path<(UserId, ProjectId)>,
+) -> Response {
+    let key = WorkspaceKey::new(user_id, project_id);
+    if let Err(error) = guard(&state, &caller, &key).await {
+        return server_error(error);
+    }
+    server_result(state.manager.terminal_snapshot(&key).await)
+}
+
+async fn terminal_input(
+    State(state): State<WorkspaceApiState>,
+    Caller(caller): Caller,
+    Path((user_id, project_id)): Path<(UserId, ProjectId)>,
+    Json(spec): Json<TerminalInputSpec>,
+) -> Response {
+    let key = WorkspaceKey::new(user_id, project_id);
+    if let Err(error) = guard(&state, &caller, &key).await {
+        return server_error(error);
+    }
+    server_result(state.manager.terminal_input(&key, &spec).await)
+}
+
+async fn terminal_resize(
+    State(state): State<WorkspaceApiState>,
+    Caller(caller): Caller,
+    Path((user_id, project_id)): Path<(UserId, ProjectId)>,
+    Json(spec): Json<TerminalResizeSpec>,
+) -> Response {
+    let key = WorkspaceKey::new(user_id, project_id);
+    if let Err(error) = guard(&state, &caller, &key).await {
+        return server_error(error);
+    }
+    server_result(state.manager.terminal_resize(&key, &spec).await)
+}
+
+async fn terminal_output(
+    State(state): State<WorkspaceApiState>,
+    Caller(caller): Caller,
+    Path((user_id, project_id)): Path<(UserId, ProjectId)>,
+    Query(query): Query<TerminalOutputQuery>,
+) -> Response {
+    let key = WorkspaceKey::new(user_id, project_id);
+    if let Err(error) = guard(&state, &caller, &key).await {
+        return server_error(error);
+    }
+    server_result(
+        state
+            .manager
+            .terminal_output(&key, query.after.unwrap_or(-1))
+            .await,
+    )
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -897,6 +972,106 @@ mod tests {
         let body = json_of(response).await;
         assert_eq!(body["exit_code"], 0);
         assert_eq!(body["stdout"], "ok");
+    }
+
+    #[tokio::test]
+    async fn workspace_terminal_snapshot_persists_across_requests() {
+        let project = ProjectId::new();
+        let user = UserId::new();
+        let app = open_app(project);
+        ensure(&app, user, project).await;
+
+        let first = send(
+            &app,
+            user,
+            "GET",
+            &format!("/api/v1/workspaces/{user}/{project}/terminal"),
+            None,
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_body = json_of(first).await;
+        let second = send(
+            &app,
+            user,
+            "GET",
+            &format!("/api/v1/workspaces/{user}/{project}/terminal"),
+            None,
+        )
+        .await;
+        let second_body = json_of(second).await;
+        assert_eq!(first_body["id"], second_body["id"]);
+    }
+
+    #[tokio::test]
+    async fn workspace_terminal_accepts_input_and_streams_output_by_cursor() {
+        let project = ProjectId::new();
+        let user = UserId::new();
+        let app = open_app(project);
+        ensure(&app, user, project).await;
+
+        let response = send(
+            &app,
+            user,
+            "POST",
+            &format!("/api/v1/workspaces/{user}/{project}/terminal/input"),
+            Some(json!({ "input": "ls -la" })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_of(response).await;
+        let chunks = body["chunks"].as_array().cloned().unwrap_or_default();
+        assert!(chunks
+            .iter()
+            .any(|chunk| chunk["text"].as_str().unwrap_or_default().contains("ok")));
+        let last_seq = body["last_seq"].as_i64().unwrap_or(0);
+
+        let newer = send(
+            &app,
+            user,
+            "GET",
+            &format!(
+                "/api/v1/workspaces/{user}/{project}/terminal/output?after={last_seq}"
+            ),
+            None,
+        )
+        .await;
+        assert_eq!(newer.status(), StatusCode::OK);
+        let newer_body = json_of(newer).await;
+        assert_eq!(
+            newer_body["chunks"].as_array().cloned().unwrap_or_default().len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_terminal_resize_is_recorded() {
+        let project = ProjectId::new();
+        let user = UserId::new();
+        let app = open_app(project);
+        ensure(&app, user, project).await;
+
+        let resized = send(
+            &app,
+            user,
+            "POST",
+            &format!("/api/v1/workspaces/{user}/{project}/terminal/resize"),
+            Some(json!({ "cols": 120, "rows": 40 })),
+        )
+        .await;
+        assert_eq!(resized.status(), StatusCode::OK);
+
+        let snapshot = send(
+            &app,
+            user,
+            "GET",
+            &format!("/api/v1/workspaces/{user}/{project}/terminal"),
+            None,
+        )
+        .await;
+        let body = json_of(snapshot).await;
+        assert_eq!(body["cols"], 120);
+        assert_eq!(body["rows"], 40);
     }
 
     #[tokio::test]

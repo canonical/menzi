@@ -208,6 +208,52 @@ pub struct TerminalResult {
     pub timed_out: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceTerminalStatus {
+    Open,
+    Running,
+    Closed,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalChunk {
+    pub seq: i64,
+    pub stream: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceTerminalSnapshot {
+    pub id: String,
+    pub status: WorkspaceTerminalStatus,
+    pub cwd: String,
+    pub cols: u16,
+    pub rows: u16,
+    pub last_seq: i64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceTerminalOutput {
+    pub id: String,
+    pub status: WorkspaceTerminalStatus,
+    pub last_seq: i64,
+    pub chunks: Vec<TerminalChunk>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalInputSpec {
+    pub input: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalResizeSpec {
+    pub cols: Option<u16>,
+    pub rows: Option<u16>,
+}
+
 impl TerminalResult {
     pub fn succeeded(&self) -> bool {
         self.exit_code == 0 && !self.timed_out

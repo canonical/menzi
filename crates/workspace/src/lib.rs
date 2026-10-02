@@ -16,6 +16,7 @@ pub use postgres::PostgresWorkspaceStore;
 pub use registry::{PostgresSessionRegistry, SessionBinding, SessionKind, SessionRegistry};
 pub use store::{InMemoryWorkspaceStore, WorkspaceStore};
 pub use types::{
-    AgentSession, PromptOutcome, ReconcileReport, TerminalRequest, TerminalResult, Workspace,
-    WorkspaceKey, WorkspaceSpec, WorkspaceStatus,
+    AgentSession, PromptOutcome, ReconcileReport, TerminalChunk, TerminalInputSpec,
+    TerminalRequest, TerminalResizeSpec, TerminalResult, Workspace, WorkspaceKey, WorkspaceSpec,
+    WorkspaceStatus, WorkspaceTerminalOutput, WorkspaceTerminalSnapshot, WorkspaceTerminalStatus,
 };
