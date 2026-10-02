@@ -35,6 +35,7 @@ export interface QuestionForm {
 }
 
 export const formsKey = (sessionId: string) => ['opencode', 'forms', sessionId] as const;
+const FORM_BASES = ['/session', '/api/session'] as const;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -170,25 +171,59 @@ function normaliseForm(value: unknown): QuestionForm | null {
 }
 
 export async function listForms(sessionId: string): Promise<QuestionForm[]> {
-  const response = await http.get<unknown>(`/session/${encodeURIComponent(sessionId)}/form`);
-  const forms = unwrapData(response);
-  if (!Array.isArray(forms)) return [];
-  return forms
-    .map(normaliseForm)
-    .filter((entry): entry is QuestionForm => entry !== null);
+  let failure: unknown = null;
+  for (const base of FORM_BASES) {
+    try {
+      const response = await http.get<unknown>(`${base}/${encodeURIComponent(sessionId)}/form`);
+      const forms = unwrapData(response);
+      if (!Array.isArray(forms)) return [];
+      return forms
+        .map(normaliseForm)
+        .filter((entry): entry is QuestionForm => entry !== null);
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
 }
 
 export async function getForm(sessionId: string, formId: string): Promise<QuestionForm> {
-  const response = await http.get<unknown>(`/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}`);
-  const form = normaliseForm(unwrapData(response));
-  if (!form) throw new Error('Invalid form response');
-  return form;
+  let failure: unknown = null;
+  for (const base of FORM_BASES) {
+    try {
+      const response = await http.get<unknown>(`${base}/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}`);
+      const form = normaliseForm(unwrapData(response));
+      if (!form) throw new Error('Invalid form response');
+      return form;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
 }
 
 export async function cancelForm(sessionId: string, formId: string): Promise<void> {
-  await http.delete(`/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}`);
+  let failure: unknown = null;
+  for (const base of FORM_BASES) {
+    try {
+      await http.delete(`${base}/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}`);
+      return;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
 }
 
 export async function replyToForm(sessionId: string, formId: string, answer: FormAnswer): Promise<void> {
-  await http.post(`/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}/reply`, { answer });
+  let failure: unknown = null;
+  for (const base of FORM_BASES) {
+    try {
+      await http.post(`${base}/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}/reply`, { answer });
+      return;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
 }

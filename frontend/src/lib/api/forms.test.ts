@@ -67,6 +67,22 @@ describe('forms API', () => {
     });
   });
 
+  it('falls back to /api/session form routes when /session returns invalid json', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/session/ses_1/form') {
+        return Promise.resolve(new Response('not json', { status: 200 }));
+      }
+      if (url === '/api/session/ses_1/form') {
+        return Promise.resolve(new Response(JSON.stringify({ data: [{ id: 'frm_1', sessionID: 'ses_1', title: 'Database', fields: [] }] })));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ data: [] })));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await listForms('ses_1')).toEqual([{ id: 'frm_1', sessionID: 'ses_1', title: 'Database', fields: [] }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('replies with keyed answers and handles no content', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal('fetch', fetchMock);
