@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NotificationProvider } from '@canonical/react-components';
@@ -52,10 +52,26 @@ interface MockOptions {
   sessions?: { id: string; title?: string; parentID?: string; time?: { updated?: number } }[];
   changes?: { file: string; additions: number; deletions: number; status: string; patch: string }[];
   forms?: import('../../lib/api/forms').QuestionForm[];
+  terminal?: {
+    id?: string;
+    status?: string;
+    cwd?: string;
+    cols?: number;
+    rows?: number;
+    last_seq?: number;
+    text?: string;
+    chunks?: { seq: number; stream: string; text: string }[];
+  };
 }
 
 function mockApi(options: MockOptions = {}) {
-  const { workspace: workspaceState = workspace('ready'), sessions = [], changes = [], forms = [] } = options;
+  const {
+    workspace: workspaceState = workspace('ready'),
+    sessions = [],
+    changes = [],
+    forms = [],
+    terminal = { id: 'term_1', status: 'open', cwd: '/workspace', cols: 100, rows: 30, last_seq: 0, text: '', chunks: [] },
+  } = options;
   const calls: string[] = [];
 
   vi.stubGlobal(
@@ -69,12 +85,91 @@ function mockApi(options: MockOptions = {}) {
         if (method === 'POST') return Promise.resolve(jsonResponse(201, { id: CREATED }));
         return Promise.resolve(jsonResponse(200, sessions));
       }
+      if (url.includes(`/workspaces/${USER_ID}/${PROJECT_ID}/connect`)) {
+        return Promise.resolve(jsonResponse(200, { endpoint: 'http://workspace.example:17999' }));
+      }
       if (/\/api\/v1\/workspaces$/.test(url)) {
         return Promise.resolve(
           jsonResponse(200, workspaceState === 'none' ? null : workspace('provisioning')),
         );
       }
+      if (url.includes('/api/pty') && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, { location: { directory: '/workspace' }, data: [] }));
+      }
+      if (url.includes('/connect-token')) {
+        return Promise.resolve(jsonResponse(200, { location: { directory: '/workspace' }, data: { ticket: 'ticket_1' } }));
+      }
+      if (url.includes('/api/pty') && method === 'POST') {
+        return Promise.resolve(jsonResponse(200, {
+          location: { directory: '/workspace' },
+          data: {
+            id: 'pty_1',
+            title: 'workspace',
+            command: 'bash',
+            args: ['-il'],
+            cwd: '/workspace',
+            status: 'running',
+            pid: 42,
+            size: { rows: 30, cols: 100 },
+            output: { head: 0, tail: 0 },
+          },
+        }));
+      }
+      if (url.includes('/api/pty') && method === 'PUT') {
+        return Promise.resolve(jsonResponse(200, {
+          location: { directory: '/workspace' },
+          data: {
+            id: 'pty_1',
+            title: 'workspace',
+            command: 'bash',
+            args: ['-il'],
+            cwd: '/workspace',
+            status: 'running',
+            pid: 42,
+            size: { rows: 40, cols: 120 },
+            output: { head: 0, tail: 0 },
+          },
+        }));
+      }
       if (url.includes('/form')) return Promise.resolve(jsonResponse(200, { data: forms }));
+      if (url.includes('/terminal/output')) {
+        return Promise.resolve(jsonResponse(200, {
+          id: terminal.id,
+          status: terminal.status,
+          last_seq: terminal.last_seq,
+          chunks: terminal.chunks,
+        }));
+      }
+      if (url.includes('/terminal/input')) {
+        return Promise.resolve(jsonResponse(200, {
+          id: terminal.id,
+          status: terminal.status,
+          last_seq: terminal.last_seq,
+          chunks: [{ seq: 1, stream: 'stdout', text: 'ok\n' }],
+        }));
+      }
+      if (url.includes('/terminal/resize')) {
+        return Promise.resolve(jsonResponse(200, {
+          id: terminal.id,
+          status: terminal.status,
+          cwd: terminal.cwd,
+          cols: 120,
+          rows: 40,
+          last_seq: terminal.last_seq,
+          text: terminal.text,
+        }));
+      }
+      if (url.includes('/terminal')) {
+        return Promise.resolve(jsonResponse(200, {
+          id: terminal.id,
+          status: terminal.status,
+          cwd: terminal.cwd,
+          cols: terminal.cols,
+          rows: terminal.rows,
+          last_seq: terminal.last_seq,
+          text: terminal.text,
+        }));
+      }
       if (url.includes('/diff')) return Promise.resolve(jsonResponse(200, { head: 'abc123', changes }));
       if (url.includes(`/api/v1/workspaces/${USER_ID}/${PROJECT_ID}`)) {
         if (workspaceState === 'missing') {
@@ -123,6 +218,27 @@ function renderPage(path: string) {
 
 beforeEach(() => {
   localStorage.clear();
+  class MockWebSocket {
+    static OPEN = 1;
+    static CONNECTING = 0;
+    readyState = MockWebSocket.CONNECTING;
+    onopen: ((event: Event) => void) | null = null;
+    onmessage: ((event: MessageEvent) => void) | null = null;
+    onclose: ((event: CloseEvent) => void) | null = null;
+    onerror: ((event: Event) => void) | null = null;
+    constructor(_url: string) {
+      queueMicrotask(() => {
+        this.readyState = MockWebSocket.OPEN;
+        this.onopen?.(new Event('open'));
+      });
+    }
+    send(_data: string) {}
+    close() {
+      this.readyState = 3;
+      this.onclose?.(new Event('close') as unknown as CloseEvent);
+    }
+  }
+  vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
   useAuthStore.setState({
     user: {
       id: USER_ID,
@@ -313,6 +429,51 @@ describe('CodePage', () => {
     expect(header).toContainElement(screen.getByRole('button', { name: S.code.newSession }));
     expect(screen.getByRole('button', { name: S.code.newSession })).toHaveTextContent('');
     expect(header).toContainElement(screen.getByRole('button', { name: S.code.showReview }));
+    expect(header).toContainElement(screen.getByRole('button', { name: S.code.showTerminal }));
+  });
+
+  it('shows only terminal in the side panel when terminal is open and review is closed', async () => {
+    mockApi({ sessions: [{ id: SESSION_A }], terminal: { id: 'term_1', status: 'open', cwd: '/workspace', cols: 100, rows: 30, last_seq: 0, text: 'boot\n', chunks: [] } });
+    const user = userEvent.setup();
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}`);
+    await screen.findByText('hello agent');
+    await user.click(screen.getByRole('button', { name: S.code.showTerminal }));
+    expect(await screen.findByRole('region', { name: S.terminal.title })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: S.review.title })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(S.terminal.output)).toBeInTheDocument();
+  });
+
+  it('stacks code review and terminal with a divider when both are open', async () => {
+    mockApi({ sessions: [{ id: SESSION_A }], terminal: { id: 'term_1', status: 'open', cwd: '/workspace', cols: 100, rows: 30, last_seq: 0, text: '', chunks: [] } });
+    const user = userEvent.setup();
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}`);
+    await screen.findByText('hello agent');
+    await user.click(screen.getByRole('button', { name: S.code.showReview }));
+    await user.click(screen.getByRole('button', { name: S.code.showTerminal }));
+    expect(await screen.findByRole('region', { name: S.review.title })).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: S.terminal.title })).toBeInTheDocument();
+    expect(document.querySelector('.app-side-panel__split')?.getAttribute('data-mode')).toBe('both');
+  });
+
+  it('does not keep code review visible after closing it before opening terminal', async () => {
+    mockApi({
+      sessions: [{ id: SESSION_A }],
+      changes: [{ file: 'src/main.ts', additions: 1, deletions: 1, status: 'modified', patch: '@@ -1 +1 @@\n-old\n+new' }],
+      terminal: { id: 'term_1', status: 'open', cwd: '/workspace', cols: 100, rows: 30, last_seq: 0, text: 'boot\n', chunks: [] },
+    });
+    const user = userEvent.setup();
+    renderPage(`/projects/${PROJECT_ID}/code?session=${SESSION_A}`);
+    await screen.findByText('hello agent');
+
+    await user.click(screen.getByRole('button', { name: S.code.showReview }));
+    expect(await screen.findByRole('region', { name: S.review.title })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: S.code.hideReview }));
+    await user.click(screen.getByRole('button', { name: S.code.showTerminal }));
+
+    expect(await screen.findByRole('region', { name: S.terminal.title })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: S.review.title })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tree', { name: S.review.filesLabel })).not.toBeInTheDocument();
+    expect(document.querySelector('.app-side-panel__split')?.getAttribute('data-mode')).toBe('terminal');
   });
 
   it('labels a tab with its title when it has one', async () => {
@@ -476,5 +637,3 @@ async function waitFor(assertion: () => void): Promise<void> {
   }
   assertion();
 }
-
-
