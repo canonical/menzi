@@ -79,7 +79,6 @@ describe('Layout', () => {
   it('renders the application shell with the top level navigation', async () => {
     const { container } = renderLayout();
     expect(screen.getByText(S.nav.projects)).toBeInTheDocument();
-    expect(screen.getByText(S.nav.needsYou)).toBeInTheDocument();
     expect(screen.getByText(S.nav.settings)).toBeInTheDocument();
     expect(screen.getByText('page content')).toBeInTheDocument();
     expect(await axe(container, axeOptions)).toHaveNoViolations();
@@ -120,61 +119,61 @@ describe('Layout', () => {
     expect(nav).toContainElement(signOut);
   });
 
-  it('offers the sign out control from the collapsed rail too', async () => {
-    const user = userEvent.setup();
-    renderLayout();
-
-    await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
-
-    expect(screen.getByTestId('app-rail')).toContainElement(
-      screen.getByRole('button', { name: S.app.signOut }),
-    );
-  });
-
-  it('collapses the navigation into an icon rail on the left', async () => {
+  it('keeps the sign out control in the same navigation when collapsed', async () => {
     const user = userEvent.setup();
     const { container } = renderLayout();
 
     await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
 
-    expect(container.querySelector('.l-navigation')).toBeNull();
-    const rail = screen.getByTestId('app-rail');
-    expect(rail).toBeInTheDocument();
-    expect(container.querySelector('.app-collapsed-bar')).toBeNull();
-    expect(container.querySelector('.app-drawer')).toBeNull();
-    expect(container.querySelector('.app-content--rail')).toBeInTheDocument();
+    const nav = container.querySelector('.l-navigation');
+    expect(nav).toHaveClass('app-navigation--collapsed');
+    expect(nav).toContainElement(screen.getByRole('button', { name: S.app.signOut }));
   });
 
-  it('keeps the rail destinations reachable by their accessible names', async () => {
+  it('collapses the navigation to icon width without unmounting it', async () => {
     const user = userEvent.setup();
-    renderLayout();
+    const { container } = renderLayout();
 
     await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
 
-    const rail = screen.getByTestId('app-rail');
-    expect(rail).toContainElement(screen.getByRole('link', { name: S.nav.projects }));
-    expect(rail).toContainElement(screen.getByRole('link', { name: S.nav.needsYou }));
-    expect(rail).toContainElement(screen.getByRole('link', { name: S.nav.settings }));
+    expect(container.querySelector('.l-navigation')).toBeInTheDocument();
+    expect(container.querySelector('.l-navigation')).toHaveClass('app-navigation--collapsed');
+    expect(container.querySelector('.app-collapsed-bar')).toBeNull();
+    expect(container.querySelector('.app-drawer')).toBeNull();
+    expect(container.querySelector('.app-content--rail')).toBeNull();
   });
 
-  it('expands the navigation from the rail', async () => {
+  it('keeps destinations reachable by their accessible names when collapsed', async () => {
+    const user = userEvent.setup();
+    const { container } = renderLayout();
+
+    await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
+
+    const nav = container.querySelector('.l-navigation');
+    expect(nav).toHaveClass('app-navigation--collapsed');
+    expect(screen.getByRole('link', { name: S.nav.projects })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: S.nav.settings })).toBeInTheDocument();
+  });
+
+  it('expands the navigation from the collapsed state', async () => {
     const user = userEvent.setup();
     const { container } = renderLayout();
 
     await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
     await user.click(screen.getByRole('button', { name: S.nav.showNavigation }));
 
-    expect(screen.queryByTestId('app-rail')).not.toBeInTheDocument();
     expect(container.querySelector('.l-navigation')).toBeInTheDocument();
+    expect(container.querySelector('.l-navigation')).not.toHaveClass('app-navigation--collapsed');
     expect(container.querySelector('.app-content--rail')).toBeNull();
   });
 
-  it('does not offer to collapse again from the rail', async () => {
+  it('offers the show-navigation control while collapsed', async () => {
     const user = userEvent.setup();
     renderLayout();
 
     await user.click(await screen.findByRole('button', { name: S.nav.hideNavigation }));
 
+    expect(screen.getByRole('button', { name: S.nav.showNavigation })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: S.nav.hideNavigation })).not.toBeInTheDocument();
   });
 

@@ -1,4 +1,4 @@
-import { ReactNode, useCallback, useEffect, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { Link, useLocation, type LinkProps } from 'react-router-dom';
 import {
   ApplicationLayout,
@@ -18,15 +18,6 @@ import { listProjects } from '../lib/api/projects';
 import { queryKeys, routes, type ProjectSection } from '../lib/routes';
 import { useActiveProject } from '../stores/activeProject';
 import { useAuthStore } from '../stores/auth';
-import { useSession } from '../stores/useSession';
-import {
-  currentTheme,
-  nextTheme,
-  setTheme,
-  themeGlyph,
-  themeLabel,
-  type Theme,
-} from '../lib/theme';
 import { S } from '../strings/catalogue';
 
 interface LayoutProps {
@@ -34,15 +25,6 @@ interface LayoutProps {
 }
 
 type NavItems = NonNullable<SideNavigationProps<LinkProps>['items']>;
-
-interface RailItem {
-  key: string;
-  icon: string;
-  glyph?: string;
-  label: string;
-  to?: string;
-  onClick?: () => void;
-}
 
 function sectionForPath(pathname: string): ProjectSection {
   if (pathname.endsWith('/design')) return 'design';
@@ -52,7 +34,6 @@ function sectionForPath(pathname: string): ProjectSection {
 
 export function Layout({ children }: LayoutProps) {
   const { user } = useAuthStore();
-  const { signOut } = useSession();
   const location = useLocation();
   const { projectId, section, recordRoute } = useActiveProject();
   const segment = sectionForPath(location.pathname);
@@ -60,17 +41,16 @@ export function Layout({ children }: LayoutProps) {
   // getting the chat more room, not a preference worth carrying between visits,
   // so the choice is deliberately not persisted.
   const [navCollapsed, setNavCollapsed] = useState(false);
-  const [theme, setThemeState] = useState<Theme>(currentTheme);
+  const [navHoverReady, setNavHoverReady] = useState(true);
 
-  const cycleTheme = useCallback(() => {
-    const next = nextTheme(theme);
-    setTheme(next);
-    setThemeState(next);
-  }, [theme]);
-
-  const toggleNav = useCallback((collapsed: boolean) => {
+  const toggleNav = (collapsed: boolean) => {
     setNavCollapsed(collapsed);
-  }, []);
+    if (collapsed) {
+      setNavHoverReady(false);
+      return;
+    }
+    setNavHoverReady(true);
+  };
 
   useEffect(() => {
     if (projectId && (section !== segment || !projectId)) {
@@ -97,36 +77,10 @@ export function Layout({ children }: LayoutProps) {
     {
       items: [
         { icon: 'code', label: S.nav.projects, to: routes.projects.list() },
-        { icon: 'information', label: S.nav.needsYou, to: routes.inbox() },
         { icon: 'user', label: S.nav.settings, to: routes.settings() },
       ],
     },
-    {
-      items: [
-        <ThemeNavItem key="theme" />,
-        ...(user ? [<SignOutNavItem key="sign-out" />] : []),
-      ],
-    },
   ];
-
-  const railItems: RailItem[] = [
-    ...(projectPath
-      ? [
-          { key: 'p-code', icon: 'code', label: S.sections.code, to: projectPath.code },
-          { key: 'p-design', icon: 'file-blank', label: S.sections.design, to: projectPath.design },
-          { key: 'p-project', icon: 'settings', label: S.sections.project, to: projectPath.project },
-        ]
-      : []),
-    { key: 'projects', icon: 'code', label: S.nav.projects, to: routes.projects.list() },
-    { key: 'inbox', icon: 'information', label: S.nav.needsYou, to: routes.inbox() },
-    { key: 'settings', icon: 'user', label: S.nav.settings, to: routes.settings() },
-    { key: 'theme', icon: 'glyph', glyph: themeGlyph(theme), label: themeLabel(theme), onClick: cycleTheme },
-    ...(user
-      ? [{ key: 'sign-out', icon: 'external-link', label: S.app.signOut, onClick: () => void signOut() }]
-      : []),
-  ];
-
-
 
   if (projectPath) {
     navItems.unshift({
@@ -139,63 +93,38 @@ export function Layout({ children }: LayoutProps) {
     });
   }
   const navigation = (
-    <div>
+    <div
+      className="app-navigation-menu"
+      onMouseLeave={() => {
+        if (navCollapsed) setNavHoverReady(true);
+      }}
+    >
+      <Button
+        appearance="base"
+        className="app-navigation-hide"
+        aria-label={navCollapsed ? S.nav.showNavigation : S.nav.hideNavigation}
+        title={navCollapsed ? S.nav.showNavigation : S.nav.hideNavigation}
+        aria-expanded={!navCollapsed}
+        onClick={(event) => {
+          const nextCollapsed = !navCollapsed;
+          toggleNav(nextCollapsed);
+          if (nextCollapsed) event.currentTarget.blur();
+        }}
+      >
+        <Icon name="pin" className={`app-navigation-toggle-icon${navCollapsed ? ' is-unpinned' : ''}`} />
+      </Button>
       <div className="app-navigation-selector">
         <ProjectSelector sectionFor={sectionForPath} />
-        <Button
-          appearance="base"
-          className="app-navigation-hide"
-          aria-label={S.nav.hideNavigation}
-          aria-expanded={true}
-          onClick={() => toggleNav(true)}
-        >
-          <Icon name="collapse" />
-        </Button>
       </div>
       <SideNavigation<LinkProps> hasIcons items={navItems} linkComponent={Link} />
+      <div className="app-navigation-footer">
+        <SideNavigation<LinkProps>
+          hasIcons
+          items={[{ items: [<ThemeNavItem key="theme" />, ...(user ? [<SignOutNavItem key="sign-out" />] : [])] }]}
+          linkComponent={Link}
+        />
+      </div>
     </div>
-  );
-
-  const rail = (
-    <nav className="app-rail is-dark" aria-label={S.nav.railLabel} data-testid="app-rail">
-      <Button
-        appearance="link"
-        className="app-rail__item"
-        aria-label={S.nav.showNavigation}
-        aria-expanded={false}
-        onClick={() => toggleNav(false)}
-      >
-        <Icon name="expand" />
-      </Button>
-      <ul className="app-rail__list">
-        {railItems.map((item) => (
-          <li key={item.key}>
-            {item.to ? (
-              <Link className="app-rail__item" to={item.to} title={item.label}>
-                <Icon name={item.icon} />
-                <span className="u-off-screen">{item.label}</span>
-              </Link>
-            ) : (
-              <Button
-                appearance="link"
-                className="app-rail__item"
-                title={item.label}
-                onClick={item.onClick}
-              >
-                {item.glyph ? (
-                  <span className="app-rail__glyph" aria-hidden="true">
-                    {item.glyph}
-                  </span>
-                ) : (
-                  <Icon name={item.icon} />
-                )}
-                <span className="u-off-screen">{item.label}</span>
-              </Button>
-            )}
-          </li>
-        ))}
-      </ul>
-    </nav>
   );
 
   return (
@@ -209,15 +138,14 @@ export function Layout({ children }: LayoutProps) {
         // The navigation is always dark, whatever the page theme is. The
         // `--dark` marker is how Vanilla themes the icons that predate its
         // theme tokens, so without it they render dark on the dark panel.
-        navigationClassName="app-navigation--dark"
-        sideNavigation={navCollapsed ? undefined : navigation}
+        navigationClassName={`app-navigation--dark${navCollapsed ? ' app-navigation--collapsed' : ''}${navHoverReady ? ' app-navigation--hover-ready' : ''}`}
+        sideNavigation={navigation}
       >
-        <div className={`app-content${navCollapsed ? ' app-content--rail' : ''}`}>
+        <div className="app-content">
           {children}
         </div>
         <NotificationConsumer />
       </ApplicationLayout>
-      {navCollapsed ? rail : null}
     </>
   );
 }
