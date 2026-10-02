@@ -1,9 +1,9 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Select, Spinner } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
 import { workspaceFilePatch, workspaceTreeChanges, type TreeDiff } from '../../lib/api/workspaces';
-import { getErrorMessage } from '../../lib/api/errors';
+import { getErrorMessage, isApiError } from '../../lib/api/errors';
 import { queryKeys } from '../../lib/routes';
 import { DiffViewer } from './DiffViewer';
 import { S } from '../../strings/catalogue';
@@ -34,6 +34,7 @@ export function CodeReviewPanel({
 
   const changes = Array.isArray(listQuery.data?.changes) ? listQuery.data!.changes : [];
   const active = changes.find((change) => change.file === selected) ?? changes[0] ?? null;
+  const version = listQuery.data?.version ?? '';
 
   const patchQuery = useQuery({
     queryKey: queryKeys.workspaces.diffPatch(
@@ -41,6 +42,7 @@ export function CodeReviewPanel({
       projectId ?? '',
       directory ?? '',
       active?.file ?? '',
+      version,
     ),
     queryFn: () =>
       workspaceFilePatch(
@@ -48,11 +50,17 @@ export function CodeReviewPanel({
         projectId as string,
         directory,
         active?.file ?? '',
+        version || undefined,
       ),
     enabled: enabled && !!active,
     retry: false,
     refetchInterval: 15000,
   });
+
+  useEffect(() => {
+    if (!isApiError(patchQuery.error) || patchQuery.error.status !== 409) return;
+    void listQuery.refetch();
+  }, [patchQuery.error, listQuery]);
 
   const change = patchQuery.data?.changes.find((entry) => entry.file === active?.file) ?? active;
   const patch = change?.patch ?? '';
