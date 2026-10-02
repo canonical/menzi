@@ -9,6 +9,7 @@ const USER = 'user-1';
 const PROJECT = 'project-1';
 const DIRECTORY = '/workspace';
 const HEAD = 'abc123def456abc123def456abc123def456abcd';
+const VERSION = 'v123';
 
 function change(over: Partial<Record<string, unknown>> = {}) {
   return {
@@ -31,10 +32,10 @@ function mockDiff(byPath: Record<string, ReturnType<typeof change>>) {
     const url = new URL(String(input), 'http://localhost');
     const path = url.searchParams.get('path');
     if (path === null) {
-      return Promise.resolve(json({ head: HEAD, changes: Object.values(byPath) }));
+      return Promise.resolve(json({ head: HEAD, version: VERSION, changes: Object.values(byPath) }));
     }
     const found = byPath[path];
-    return Promise.resolve(json({ head: HEAD, changes: found ? [found] : [] }));
+    return Promise.resolve(json({ head: HEAD, version: VERSION, changes: found ? [found] : [] }));
   });
   vi.stubGlobal('fetch', fetchMock);
 }
@@ -98,7 +99,7 @@ describe('CodeReviewPanel from git', () => {
   it('never asks the session proxy for a diff', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       void input;
-      return Promise.resolve(json({ head: HEAD, changes: [change({ patch: PATCH })] }));
+      return Promise.resolve(json({ head: HEAD, version: VERSION, changes: [change({ patch: PATCH })] }));
     });
     vi.stubGlobal('fetch', fetchMock);
     renderPanel();
@@ -209,7 +210,7 @@ describe('CodeReviewPanel from git', () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost');
       if (url.searchParams.has('path')) return new Promise(() => {});
-      return Promise.resolve(json({ head: HEAD, changes: [change()] }));
+      return Promise.resolve(json({ head: HEAD, version: VERSION, changes: [change()] }));
     }));
     renderPanel();
     expect(await screen.findByText(S.review.patchLoading)).toBeInTheDocument();
@@ -223,7 +224,7 @@ describe('CodeReviewPanel from git', () => {
       if (url.searchParams.has('path') && failed) {
         return Promise.resolve({ ...json({ error: { message: 'patch failed' } }), ok: false, status: 500 });
       }
-      return Promise.resolve(json({ head: HEAD, changes: [change({ patch: url.searchParams.has('path') ? PATCH : '' })] }));
+      return Promise.resolve(json({ head: HEAD, version: VERSION, changes: [change({ patch: url.searchParams.has('path') ? PATCH : '' })] }));
     }));
     const user = userEvent.setup();
     renderPanel();
@@ -257,5 +258,43 @@ describe('CodeReviewPanel from git', () => {
     renderPanel();
 
     expect(await screen.findByText('git failed')).toBeInTheDocument();
+  });
+
+  it('pins patch requests to the list version', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.searchParams.has('path')) {
+        expect(url.searchParams.get('version')).toBe(VERSION);
+      }
+      return Promise.resolve(json({ head: HEAD, version: VERSION, changes: [change({ patch: PATCH })] }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderPanel();
+    await screen.findByTestId('diff-viewer');
+  });
+
+  it('refreshes the list when the patch version is stale', async () => {
+    let listCalls = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (!url.searchParams.has('path')) {
+        listCalls += 1;
+        const version = listCalls > 1 ? 'v2' : 'v1';
+        return Promise.resolve(json({ head: HEAD, version, changes: [change({ patch: '' })] }));
+      }
+      if (url.searchParams.get('version') === 'v1') {
+        return Promise.resolve({
+          ...json({ error: { message: 'stale diff version' } }),
+          ok: false,
+          status: 409,
+          text: async () => JSON.stringify({ error: { message: 'stale diff version' } }),
+        });
+      }
+      return Promise.resolve(json({ head: HEAD, version: 'v2', changes: [change({ patch: PATCH })] }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderPanel();
+    expect(await screen.findByTestId('diff-viewer')).toBeInTheDocument();
+    expect(listCalls).toBeGreaterThan(1);
   });
 });
