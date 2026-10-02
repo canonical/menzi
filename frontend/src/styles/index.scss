@@ -37,11 +37,13 @@
   font-size: 1.125rem;
   font-weight: 500;
   letter-spacing: 0.01em;
+  margin: 0;
 }
 
 .menzi-logo__icon {
-  color: var(--vf-color-text-default);
   flex-shrink: 0;
+  height: 40px;
+  width: auto;
 }
 
 // The page content fills the main panel and is the scroll container for the
@@ -54,13 +56,18 @@
   height: 100%;
   overflow-y: auto;
   padding: 1.5rem 1rem 2rem;
+  transition: padding-left 320ms ease-in-out;
 }
 
 // A workspace page fills the panel, so the roomy bottom padding that suits a
 // scrolling page would leave the composer stranded above a large gap. Keep a
 // small one instead, and let the panes supply their own internal spacing.
 .app-content:has(.app-split) {
-  padding-bottom: 1rem;
+  padding: 1rem;
+}
+
+.app-content:has(.app-code) {
+  padding-top: 0.75rem;
 }
 
 @media (width >= 64.75rem) {
@@ -91,6 +98,55 @@
   align-items: center;
   justify-content: flex-end;
   margin-bottom: 0.75rem;
+}
+
+.app-code-header {
+  align-items: center;
+  border-bottom: 1px solid var(--vf-color-border-low-contrast);
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  min-width: 0;
+}
+
+.app-code-header__tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.app-code-header__tabs > nav,
+.app-code-header__tabs [role='tablist'] {
+  margin-bottom: 0;
+}
+
+.app-code-header__tabs [role='tablist'] {
+  flex-wrap: nowrap;
+  width: max-content;
+  min-width: 100%;
+}
+
+.app-code-header__tabs [role='tab'] {
+  white-space: nowrap;
+}
+
+.app-code-header__actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.375rem;
+  padding-bottom: 0.25rem;
+}
+
+.app-code-header__button {
+  align-items: center;
+  display: flex;
+  height: 2.5rem;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  width: 2.5rem;
 }
 
 .app-toolbar {
@@ -153,7 +209,80 @@
 .app-split {
   display: grid;
   gap: 1.5rem;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.app-split--animated {
+  gap: 0;
+  grid-template-columns: minmax(0, 1fr) 0 minmax(0, 0fr);
+  overflow: hidden;
+  transition: grid-template-columns 320ms ease-in-out;
+}
+
+.app-split--animated[data-layout='split'] {
+  grid-template-columns: minmax(0, 1fr) 2.75rem minmax(0, 2fr);
+}
+
+.app-split--animated[data-layout='review'] {
+  grid-template-columns: minmax(0, 0fr) 2.75rem minmax(0, 1fr);
+}
+
+.app-split--animated > .app-code__chat,
+.app-split--animated > .app-code__review {
+  overflow: hidden;
+  transition: opacity 320ms ease-in-out, visibility 320ms;
+}
+
+.app-split--animated[data-layout='chat'] > .app-code__review,
+.app-split--animated[data-layout='review'] > .app-code__chat {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.app-code__divider {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  overflow: hidden;
+  padding-top: 0.5rem;
+  transition: opacity 320ms ease-in-out, visibility 320ms;
+}
+
+.app-split--animated[data-layout='chat'] > .app-code__divider {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.app-code__review-toggle-icon {
+  height: 1.25rem;
+  vertical-align: middle;
+  width: 1.25rem;
+}
+
+.app-code__panel-control {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+  padding: 0.5rem;
+}
+
+.app-code__arrow--left {
+  transform: rotate(90deg);
+}
+
+.app-code__arrow--right {
+  transform: rotate(-90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-split--animated,
+  .app-split--animated > .app-code__chat,
+  .app-split--animated > .app-code__review,
+  .app-code__divider {
+    transition: none;
+  }
 }
 
 .app-code__chat,
@@ -161,6 +290,13 @@
 .app-code__chat-panel {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+}
+
+.app-code__review {
+  --app-review-background: color-mix(in srgb, var(--vf-color-background-default) 96%, var(--vf-color-text-default));
+
+  background: var(--app-review-background);
 }
 
 .app-code__chat-panel {
@@ -272,16 +408,6 @@
 }
 
 @media (width >= 64.75rem) {
-  .app-split {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  // The review panel is a drawer, not a peer: when it is open the chat keeps a
-  // third of the width and the diff takes the rest.
-  .app-split--review {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
-  }
-
   // Every step of the workspace chain is allowed to shrink, so the panes end up
   // with a height and scroll their own content.
   .app-code,
@@ -549,6 +675,136 @@
   margin-bottom: 0.75rem;
 }
 
+.app-question {
+  border: 1px solid var(--vf-color-border-default);
+  border-radius: 0.25rem;
+  margin: 1rem 0;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.app-question__header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.app-question__heading {
+  font-size: 0.875rem;
+  font-weight: 550;
+  margin: 0;
+}
+
+.app-question__section {
+  border: 0;
+  margin: 0 0 1rem;
+  min-width: 0;
+  padding: 0;
+}
+
+.app-question__section + .app-question__section {
+  border-top: 1px solid var(--vf-color-border-low-contrast);
+  padding-top: 1rem;
+}
+
+.app-question__prompt {
+  font-size: 1rem;
+  font-weight: 550;
+  margin-bottom: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.app-question__description,
+.app-question__hint,
+.app-question__composer-hint {
+  color: var(--vf-color-text-muted);
+  font-size: 0.8125rem;
+  margin-bottom: 0.5rem;
+}
+
+.app-question__options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.app-question__option {
+  background: var(--vf-color-background-alt);
+  border: 1px solid var(--vf-color-border-low-contrast);
+  border-radius: 0.25rem;
+  padding: 0.75rem;
+}
+
+.app-question__option.is-selected {
+  border-color: var(--vf-color-link-default);
+}
+
+.app-question__option label {
+  cursor: pointer;
+  margin-bottom: 0;
+  width: 100%;
+}
+
+.app-question__option-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  overflow-wrap: anywhere;
+}
+
+.app-question__recommended {
+  border: 1px solid var(--vf-color-border-low-contrast);
+  border-radius: 0.25rem;
+  color: var(--vf-color-text-muted);
+  display: inline-block;
+  font-size: 0.75rem;
+  margin-left: 0.5rem;
+  padding: 0 0.25rem;
+}
+
+.app-question__text {
+  field-sizing: content;
+  margin-bottom: 0;
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.app-question__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.app-question__footer button {
+  margin-bottom: 0;
+}
+
+.app-question__error {
+  color: var(--vf-color-border-negative);
+}
+
+.app-question__summary {
+  margin: 0.75rem 0 0;
+}
+
+.app-question__summary > div {
+  display: grid;
+  gap: 0.25rem 1rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  margin-bottom: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.app-question__summary dd {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
 .app-chat-list {
   display: flex;
   flex-direction: column;
@@ -565,6 +821,12 @@
 
 .app-chat-turn--user {
   border-left-color: var(--vf-color-border-default);
+}
+
+.app-code__chat .app-chat-turn p,
+.app-code__chat .app-chat-turn ul,
+.app-code__chat .app-chat-turn ol {
+  max-width: none;
 }
 
 .app-chat-turn__meta {
@@ -609,61 +871,94 @@
 
 .app-review__files {
   border-right: 1px solid var(--vf-color-border-low-contrast);
-  flex: 0 0 14rem;
+  flex: 0 0 11rem;
   list-style: none;
   margin: 0;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0;
-  width: 14rem;
+  width: 11rem;
 }
 
-.app-review__file {
-  align-items: flex-start;
+.app-review-tree {
+  padding: 0.375rem 0;
+}
+
+.app-review-tree__group {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.app-review-tree__item {
+  align-items: center;
   background: transparent;
   border: 0;
-  border-bottom: 1px solid var(--vf-color-border-low-contrast);
-  cursor: pointer;
+  color: var(--vf-color-text-default);
   display: flex;
-  flex-direction: column;
   font-size: 0.8125rem;
-  gap: 0.25rem;
-  padding: 0.5rem 0.75rem;
+  gap: 0.125rem;
+  line-height: 1.5;
+  margin: 0;
+  min-width: 0;
+  padding: 0.25rem 0.375rem 0.25rem calc(0.125rem + var(--tree-level) * 0.5rem);
   text-align: left;
   width: 100%;
 }
 
-.app-review__file:hover {
+.app-review-tree__item:hover {
   background: var(--vf-color-background-hover);
 }
 
-.app-review__file[aria-current='true'] {
+.app-review-tree__item[aria-selected='true'] {
   background: var(--vf-color-background-active);
   box-shadow: inset 2px 0 0 var(--vf-color-text-default);
-  color: var(--vf-color-text-default);
 }
 
-.app-review__file-row {
-  align-items: center;
-  display: flex;
-  gap: 0.5rem;
-  justify-content: space-between;
-  min-width: 0;
-  width: 100%;
+.app-review-tree__disclosure {
+  flex: 0 0 0.5rem;
+  height: 0.5rem;
 }
 
-.app-review__file-base,
-.app-review__file-dir {
+.app-review-tree__disclosure > i {
+  height: 0.5rem;
+  vertical-align: top;
+  width: 0.5rem;
+}
+
+.app-review-tree__chevron--closed {
+  transform: rotate(-90deg);
+}
+
+.app-review-tree__icon {
+  color: var(--vf-color-text-muted);
+  flex: 0 0 1.125rem;
+  height: 1.125rem;
+  width: 1.125rem;
+}
+
+.app-review-tree__icon--code {
+  color: var(--vf-color-link-default);
+}
+
+.app-review-tree__icon--style {
+  color: var(--vf-color-link-visited);
+}
+
+.app-review-tree__icon--data {
+  color: var(--vf-color-border-caution);
+}
+
+.app-review-tree__icon--image {
+  color: var(--vf-color-border-positive);
+}
+
+.app-review-tree__name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.app-review__file-dir {
-  color: var(--vf-color-text-muted);
-  font-size: 0.75rem;
 }
 
 .app-review__file-counts {
@@ -687,7 +982,13 @@
   flex: 1 1 auto;
   flex-direction: column;
   min-width: 0;
-  overflow-y: auto;
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+.app-review__content {
+  min-height: 0;
+  overflow: auto;
   overscroll-behavior: contain;
   padding: 0.75rem;
 }
@@ -696,17 +997,65 @@
   color: var(--vf-color-text-muted);
   font-family: var(--vf-font-family-code, monospace);
   font-size: 0.75rem;
-  margin: 0.5rem 0 0;
+  margin: 0.5rem 0 0.75rem;
 }
 
 .app-review__viewer-header {
+  background: var(--app-review-background, var(--vf-color-background-default));
+  border-bottom: 1px solid var(--vf-color-border-low-contrast);
+  flex: 0 0 auto;
+  overflow-wrap: anywhere;
+  padding: 0.75rem;
+}
+
+.app-review__toolbar,
+.app-review__controls,
+.app-review__file-heading {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.75rem;
+}
+
+.app-review__toolbar {
+  font-size: 0.875rem;
+  padding-bottom: 0.75rem;
+}
+
+.app-review__file-heading {
   justify-content: space-between;
   margin-bottom: 0.75rem;
-  overflow-wrap: anywhere;
+}
+
+.app-review__controls {
+  font-size: 0.8125rem;
+}
+
+.app-review__controls select {
+  margin-bottom: 0;
+  width: auto;
+}
+
+.app-review__mode {
+  margin: 0;
+}
+
+@media (width < 64.75rem) {
+  .app-review__panes {
+    flex-direction: column;
+  }
+
+  .app-review__files {
+    border-bottom: 1px solid var(--vf-color-border-low-contrast);
+    border-right: 0;
+    flex: 0 0 auto;
+    max-height: 12rem;
+    width: 100%;
+  }
+
+  .app-review__content {
+    max-height: 70vh;
+  }
 }
 
 .app-md {
@@ -961,6 +1310,61 @@
   overflow-x: auto;
 }
 
+.app-diff__body {
+  min-width: 100%;
+  width: max-content;
+}
+
+.app-diff--split .app-diff__row,
+.app-diff__columns {
+  grid-template-columns: repeat(2, minmax(28rem, 1fr));
+}
+
+.app-diff__columns {
+  background: var(--vf-color-background-alt);
+  display: grid;
+  font-size: 0.75rem;
+}
+
+.app-diff__columns > span {
+  padding: 0.375rem 0.75rem;
+}
+
+.app-diff--unified .app-diff__row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app-diff--unified .app-diff__columns {
+  grid-template-columns: 3rem 3rem;
+}
+
+.app-diff--unified .app-diff__columns > span {
+  padding: 0.375rem 0;
+  text-align: center;
+}
+
+.app-diff--unified .app-diff__cell--left {
+  border-right: 0;
+}
+
+.app-diff--wrap .app-diff__body {
+  width: 100%;
+}
+
+.app-diff--wrap.app-diff--split .app-diff__row,
+.app-diff--wrap.app-diff--split .app-diff__columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.app-diff--wrap .app-diff__content {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.app-diff--wrap .app-diff__content > span {
+  min-width: 0;
+}
+
 .app-diff__hunk-header {
   background: var(--vf-color-background-alt);
   border-bottom: 1px solid var(--vf-color-border-low-contrast);
@@ -982,7 +1386,6 @@
 .app-diff__cell {
   display: flex;
   min-width: 0;
-  overflow: hidden;
 }
 
 .app-diff__cell--left {
@@ -992,19 +1395,17 @@
 // Vanilla's positive and negative backgrounds are very pale, so a changed cell
 // also gets a bar in the matching text colour. Both tokens are theme aware.
 .app-diff__cell--added {
-  background: var(--vf-color-background-positive);
-}
+  --app-diff-line-color: var(--vf-color-border-positive);
 
-.app-diff__cell--added.app-diff__cell--left {
-  box-shadow: inset 2px 0 0 var(--vf-color-positive-text);
+  background: color-mix(in srgb, var(--app-review-background, var(--vf-color-background-default)) 88%, var(--app-diff-line-color));
+  box-shadow: inset 2px 0 0 var(--app-diff-line-color);
 }
 
 .app-diff__cell--removed {
-  background: var(--vf-color-background-negative);
-}
+  --app-diff-line-color: var(--vf-color-border-negative);
 
-.app-diff__cell--removed.app-diff__cell--right {
-  box-shadow: inset -2px 0 0 var(--vf-color-negative-text);
+  background: color-mix(in srgb, var(--app-review-background, var(--vf-color-background-default)) 88%, var(--app-diff-line-color));
+  box-shadow: inset 2px 0 0 var(--app-diff-line-color);
 }
 
 .app-diff__cell--meta {
@@ -1034,12 +1435,11 @@
 .app-diff__content {
   flex: 1 1 auto;
   min-width: 0;
-  overflow-x: auto;
   padding-right: 0.75rem;
   white-space: pre;
 }
 
-.app-diff__content span {
+.app-diff__content > span {
   display: block;
   min-width: max-content;
 }
@@ -1114,70 +1514,341 @@
   font-weight: 700;
 }
 
+.app-navigation--dark > div {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.l-navigation.app-navigation--dark {
+  --app-nav-expanded-width: 16rem;
+  --app-nav-collapsed-width: 3.5rem;
+
+  flex: 0 0 var(--app-nav-expanded-width);
+  width: var(--app-nav-expanded-width);
+  min-width: var(--app-nav-expanded-width);
+  max-width: var(--app-nav-expanded-width);
+  inline-size: var(--app-nav-expanded-width);
+  max-inline-size: var(--app-nav-expanded-width);
+  min-inline-size: var(--app-nav-expanded-width);
+  overflow: visible;
+  position: relative;
+  transition: flex-basis 320ms ease-in-out, inline-size 320ms ease-in-out, width 320ms ease-in-out;
+  z-index: 30;
+}
+
+.l-navigation.app-navigation--dark .l-navigation__drawer {
+  overflow: visible;
+  width: var(--app-nav-expanded-width);
+  transition: width 320ms ease-in-out;
+}
+
+.l-navigation.app-navigation--dark.app-navigation--collapsed {
+  flex-basis: var(--app-nav-collapsed-width);
+  width: var(--app-nav-collapsed-width);
+  min-width: var(--app-nav-collapsed-width);
+  max-width: var(--app-nav-collapsed-width);
+  inline-size: var(--app-nav-collapsed-width);
+  max-inline-size: var(--app-nav-collapsed-width);
+  min-inline-size: var(--app-nav-collapsed-width);
+}
+
+.l-navigation.app-navigation--dark.app-navigation--collapsed .l-navigation__drawer {
+  width: var(--app-nav-collapsed-width);
+}
+
+.l-navigation.app-navigation--dark.app-navigation--collapsed.app-navigation--hover-ready:hover,
+.l-navigation.app-navigation--dark.app-navigation--collapsed.app-navigation--hover-ready:focus-within {
+  flex-basis: var(--app-nav-expanded-width);
+  width: var(--app-nav-expanded-width);
+  min-width: var(--app-nav-expanded-width);
+  max-width: var(--app-nav-expanded-width);
+  inline-size: var(--app-nav-expanded-width);
+  max-inline-size: var(--app-nav-expanded-width);
+  min-inline-size: var(--app-nav-expanded-width);
+}
+
+.l-navigation.app-navigation--dark.app-navigation--collapsed.app-navigation--hover-ready:hover .l-navigation__drawer,
+.l-navigation.app-navigation--dark.app-navigation--collapsed.app-navigation--hover-ready:focus-within .l-navigation__drawer {
+  width: var(--app-nav-expanded-width);
+}
+
+.app-navigation--dark > div > :last-child {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.app-navigation--dark .p-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: visible;
+}
+
+.app-navigation--dark .p-panel__content {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: visible;
+}
+
+@media (width >= 64.75rem) {
+  .l-application {
+    grid-template-columns: 16rem minmax(0, 1fr) minmax(0, min-content);
+    transition: grid-template-columns 320ms ease-in-out;
+  }
+
+  .l-application:has(.l-navigation.app-navigation--collapsed:not(.app-navigation--hover-ready)),
+  .l-application:has(
+    .l-navigation.app-navigation--collapsed.app-navigation--hover-ready:not(:hover):not(:focus-within)
+  ) {
+    grid-template-columns: 3.5rem minmax(0, 1fr) minmax(0, min-content);
+  }
+}
+
+.app-navigation-menu {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 100%;
+  overflow: visible;
+}
+
+.app-navigation-footer {
+  margin-top: auto;
+  padding-top: 1rem;
+}
+
 .app-navigation-selector {
   align-items: center;
   display: flex;
   gap: 0.5rem;
   justify-content: space-between;
   padding-bottom: 0.75rem;
+  padding-inline: 1rem;
   padding-top: 0.5rem;
 }
 
 .app-navigation-hide {
-  flex: 0 0 auto;
-  margin-bottom: 0;
-}
-
-// With the navigation collapsed the layout drops its own side panel, and a
-// narrow icon rail stands in for it on the left. Vanilla only offers that rail
-// between its small and large breakpoints, and above the large one it forces
-// the panel back open, so it cannot be reused at an arbitrary width.
-.app-rail {
-  background: var(--vf-color-background-default);
-  bottom: 0;
-  color: var(--vf-color-x-light);
-  left: 0;
-  overflow-y: auto;
-  padding: 0.25rem 0;
-  position: fixed;
-  top: 0;
-  width: 3rem;
-  z-index: 15;
-}
-
-.app-rail__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.app-rail__item {
   align-items: center;
-  background: transparent;
-  border: 0;
-  color: inherit;
-  cursor: pointer;
   display: flex;
   height: 2.5rem;
   justify-content: center;
-  margin: 0;
+  margin-bottom: 0;
+  opacity: 1;
   padding: 0;
-  text-decoration: none;
+  position: absolute;
+  right: 0.5rem;
+  top: 0.5rem;
+  transition: opacity 160ms ease-in-out, visibility 160ms;
+  visibility: visible;
+  width: 2.5rem;
+  z-index: 6;
+}
+
+.app-navigation--collapsed:not(.app-navigation--hover-ready) .app-navigation-hide,
+.app-navigation--collapsed.app-navigation--hover-ready:not(:hover):not(:focus-within)
+  .app-navigation-hide {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.app-navigation--dark .l-navigation__drawer {
+  position: relative;
+}
+
+.app-navigation--dark .p-custom-select__toggle,
+.app-navigation--dark .p-custom-select__toggle:hover,
+.app-navigation--dark .p-custom-select__toggle:focus-visible {
+  background: rgb(38 38 38);
+  border-color: rgb(82 82 82);
+  color: rgb(245 245 245);
+}
+
+.app-navigation--dark .p-contextual-menu__dropdown {
+  background: rgb(38 38 38);
+  border: 1px solid rgb(82 82 82);
+  max-width: 24rem;
+  min-width: 18rem;
+}
+
+.app-navigation--dark .p-contextual-menu__link,
+.app-navigation--dark .p-contextual-menu__link:visited,
+.app-navigation--dark .p-contextual-menu__link:active {
+  color: rgb(245 245 245);
+}
+
+.app-navigation--dark .p-contextual-menu__link:hover {
+  background: rgb(56 56 56);
+  color: rgb(245 245 245);
+}
+
+.project-selector-section {
+  margin-bottom: 0.5rem;
+  position: relative;
+  width: 100%;
+  z-index: 40;
+}
+
+.project-selector__label {
+  color: rgb(179 179 179);
+  display: block;
+  font-size: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.project-selector__toggle {
+  align-items: center;
+  background: rgb(38 38 38);
+  border: 1px solid rgb(82 82 82);
+  color: rgb(245 245 245);
+  cursor: pointer;
+  display: flex;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  margin-bottom: 0;
+  padding: 0.5rem 0.625rem;
+  text-align: left;
+  width: 100% !important;
+}
+
+.project-selector__toggle:hover,
+.project-selector__toggle:focus-visible {
+  background: rgb(56 56 56);
+}
+
+.project-selector__folder-icon {
+  flex: 0 0 1rem;
+  height: 1rem;
+  width: 1rem;
+}
+
+.project-selector__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-selector__chevron {
+  flex: 0 0 0.875rem;
+  height: 0.875rem;
+  width: 0.875rem;
+}
+
+.project-selector__dropdown {
+  background: rgb(38 38 38);
+  border: 1px solid rgb(82 82 82);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 30%);
+  margin-top: 0.25rem;
+  max-width: 24rem;
+  min-width: 18rem;
+  overflow: hidden;
+  position: absolute;
+  width: 100%;
+  z-index: 100;
+}
+
+.project-selector__search-input {
+  background: rgb(24 24 24);
+  border: 0;
+  border-bottom: 1px solid rgb(82 82 82);
+  color: rgb(245 245 245);
+  padding: 0.5rem 0.625rem;
   width: 100%;
 }
 
-.app-rail__item:hover,
-.app-rail__item:focus-visible {
-  background: var(--vf-color-background-hover);
+.project-selector__dropdown .p-form__group,
+.project-selector__dropdown .p-form-validation {
+  margin-bottom: 0;
 }
 
-.app-rail__glyph {
-  font-size: 1rem;
-  line-height: 1;
+.project-selector__dropdown .project-selector__search-input {
+  margin-bottom: 0;
 }
 
-.app-content--rail {
-  padding-left: 3rem;
+.project-selector__search-input:focus {
+  outline: 2px solid rgb(12 112 248);
+  outline-offset: -2px;
+}
+
+.project-selector__list {
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.project-selector__item {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: rgb(245 245 245);
+  cursor: pointer;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 0;
+  padding: 0.5rem 0.625rem;
+  text-align: left;
+  width: 100%;
+}
+
+.project-selector__item:hover,
+.project-selector__item.is-selected {
+  background: rgb(56 56 56);
+}
+
+.project-item__slug {
+  color: rgb(179 179 179);
+  font-size: 0.75rem;
+}
+
+.project-selector__empty {
+  color: rgb(179 179 179);
+  margin: 0;
+  padding: 0.625rem;
+}
+
+.app-navigation-toggle-icon {
+  height: 1.25rem;
+  transition: transform 160ms ease-in-out, opacity 160ms ease-in-out;
+  width: 1.25rem;
+}
+
+.p-icon--pin.app-navigation-toggle-icon {
+  background-color: currentcolor;
+  background-image: none;
+  mask-image: url("data:image/svg+xml,%3Csvg width='16' height='16' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11.547.119l4.412 4.412-1.06 1.06-.366-.365-2.205 2.204-1.385 2.598 1.128 1.129-1.06 1.06-3.012-3.011-4.523 4.524-1.898.916.744-1.882 4.617-4.618-3.01-3.01 1.06-1.06 1.028 1.027 2.819-1.252 2.16-2.161-.51-.51 1.06-1.061zm.381 2.76L9.897 4.912a1.5 1.5 0 01-.329.248l-.123.062L7.16 6.237l2.678 2.678 1.167-2.19a1.5 1.5 0 01.164-.246l.1-.11 2.075-2.076-1.415-1.414z'/%3E%3C/svg%3E");
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg width='16' height='16' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11.547.119l4.412 4.412-1.06 1.06-.366-.365-2.205 2.204-1.385 2.598 1.128 1.129-1.06 1.06-3.012-3.011-4.523 4.524-1.898.916.744-1.882 4.617-4.618-3.01-3.01 1.06-1.06 1.028 1.027 2.819-1.252 2.16-2.161-.51-.51 1.06-1.061zm.381 2.76L9.897 4.912a1.5 1.5 0 01-.329.248l-.123.062L7.16 6.237l2.678 2.678 1.167-2.19a1.5 1.5 0 01.164-.246l.1-.11 2.075-2.076-1.415-1.414z'/%3E%3C/svg%3E");
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+}
+
+.app-navigation-toggle-icon.is-unpinned {
+  opacity: 0.7;
+  transform: rotate(35deg);
+}
+
+.app-navigation--collapsed:not(.app-navigation--hover-ready) .app-navigation-selector,
+.app-navigation--collapsed:not(.app-navigation--hover-ready) .app-navigation-footer .p-side-navigation__label,
+.app-navigation--collapsed:not(.app-navigation--hover-ready) .p-side-navigation__label,
+.app-navigation--collapsed:not(.app-navigation--hover-ready) .p-side-navigation__header,
+.app-navigation--collapsed.app-navigation--hover-ready:not(:hover):not(:focus-within) .app-navigation-selector,
+.app-navigation--collapsed.app-navigation--hover-ready:not(:hover):not(:focus-within)
+  .app-navigation-footer
+  .p-side-navigation__label,
+.app-navigation--collapsed.app-navigation--hover-ready:not(:hover):not(:focus-within) .p-side-navigation__label,
+.app-navigation--collapsed.app-navigation--hover-ready:not(:hover):not(:focus-within) .p-side-navigation__header {
+  opacity: 0;
+  overflow: hidden;
+  visibility: hidden;
+  white-space: nowrap;
 }
 
 // A side navigation link that is a button rather than a link. Vanilla styles
