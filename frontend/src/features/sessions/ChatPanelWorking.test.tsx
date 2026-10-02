@@ -13,6 +13,10 @@ vi.mock('../../lib/chat/useSessionStream', () => ({
   useSessionStream: () => {},
 }));
 
+vi.mock('../../lib/chat/useSessionForms', () => ({
+  useSessionForms: () => ({ forms: [], pending: [], submit: vi.fn(), dismiss: vi.fn(), error: null, refetch: vi.fn() }),
+}));
+
 function user(text: string) {
   return {
     info: { id: 'msg_u', sessionID: 'ses_1', role: 'user' },

@@ -68,6 +68,9 @@ function mockApi(messages: unknown[], onPrompt?: (body: unknown) => void) {
       if (url.includes('/message')) {
         return Promise.resolve(jsonResponse(200, messages));
       }
+      if (url.includes('/form')) {
+        return Promise.resolve(jsonResponse(200, { data: [] }));
+      }
       if (url.includes('/api/model')) {
         return Promise.resolve(
           jsonResponse(200, {
@@ -147,6 +150,20 @@ describe('ChatPanel', () => {
 
     expect(scroller.scrollTop).toBe(1000);
     expect(screen.queryByRole('button', { name: S.chat.jumpToLatest })).not.toBeInTheDocument();
+  });
+
+  it('shows a forms error even when no pending form is loaded', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/message')) return Promise.resolve(jsonResponse(200, MESSAGES));
+        if (url.includes('/form')) return Promise.resolve(jsonResponse(500, { error: 'forms unavailable' }));
+        return Promise.resolve(jsonResponse(404, { error: 'no route' }));
+      }),
+    );
+    renderWithClient(<ChatPanel sessionId={SESSION} />);
+    expect(await screen.findByText('forms unavailable')).toBeInTheDocument();
   });
 });
 

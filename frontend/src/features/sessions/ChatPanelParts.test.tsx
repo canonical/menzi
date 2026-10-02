@@ -57,6 +57,7 @@ function mockApi(messages: unknown[]) {
     vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/message')) return Promise.resolve(jsonResponse(200, messages));
+      if (url.includes('/form')) return Promise.resolve(jsonResponse(200, { data: [] }));
       return Promise.resolve(jsonResponse(404, { error: 'no route' }));
     }),
   );
