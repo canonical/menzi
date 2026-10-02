@@ -19,6 +19,7 @@ chrono.workspace = true
 reqwest.workspace = true
 async-trait.workspace = true
 sqlx.workspace = true
+sha2 = "0.10"
 
 [dev-dependencies]
 tower.workspace = true

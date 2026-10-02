@@ -144,6 +144,7 @@ pub struct TreeChange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TreeDiff {
     pub head: String,
+    pub version: String,
     pub changes: Vec<TreeChange>,
 }
 
