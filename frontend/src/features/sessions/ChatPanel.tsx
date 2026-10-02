@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
-import { listMessages } from '../../lib/api/opencode';
+import { listMessages, sendPrompt } from '../../lib/api/opencode';
 import { getErrorMessage } from '../../lib/api/errors';
 import { queryKeys } from '../../lib/routes';
 import { useStickyScroll } from '../../hooks/useStickyScroll';
@@ -131,6 +131,30 @@ function fallbackForms(messages: { messages: { parts?: MessagePart[] }[] } | und
   return built;
 }
 
+function valueAsText(value: string | string[] | number | boolean): string {
+  if (Array.isArray(value)) return value.join(', ');
+  return String(value);
+}
+
+function answerAsMessage(answer: FormAnswer): string {
+  const entries = Object.entries(answer);
+  if (entries.length === 0) return '';
+  if (entries.length === 1) return valueAsText(entries[0][1]);
+  return entries.map(([key, value]) => `- ${key}: ${valueAsText(value)}`).join('\n');
+}
+
+function answerForRequest(request: QuestionForm, answer: FormAnswer): string {
+  const keys = Object.keys(answer);
+  if (keys.length === 0) return '';
+  if (keys.length === 1) {
+    const key = keys[0];
+    const field = request.fields.find((entry) => entry.key === key);
+    const prompt = field?.title || request.title;
+    return `${prompt}: ${valueAsText(answer[key])}`;
+  }
+  return answerAsMessage(answer);
+}
+
 async function submitFallback(
   sessionId: string,
   request: QuestionForm,
@@ -148,8 +172,13 @@ async function submitFallback(
       failure = error;
     }
   }
+  const text = answerForRequest(request, answer);
+  if (text) {
+    await sendPrompt({ sessionId, text });
+    return;
+  }
   if (failure) throw failure;
-  throw new Error('Could not resolve form id for this question');
+  throw new Error('Could not submit this answer');
 }
 
 export function ChatPanel({ sessionId }: { sessionId: string }) {
