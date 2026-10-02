@@ -207,6 +207,7 @@ describe('ChatPanel', () => {
     );
     renderWithClient(<ChatPanel sessionId={SESSION} />);
     expect(await screen.findByText('Banana')).toBeInTheDocument();
+    expect(screen.queryByText(/not valid JSON|unexpected character/i)).not.toBeInTheDocument();
   });
 });
 

@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
 import { listMessages, sendPrompt } from '../../lib/api/opencode';
@@ -81,6 +81,18 @@ function answerAsMessage(answer: FormAnswer): string {
   return entries.map(([key, value]) => `- ${key}: ${valueAsText(value)}`).join('\n');
 }
 
+function answerForRequest(request: QuestionForm, answer: FormAnswer): string {
+  const keys = Object.keys(answer);
+  if (keys.length === 0) return '';
+  if (keys.length === 1) {
+    const key = keys[0];
+    const field = request.fields.find((entry) => entry.key === key);
+    const prompt = field?.title || request.title;
+    return `${prompt}: ${valueAsText(answer[key])}`;
+  }
+  return answerAsMessage(answer);
+}
+
 function fallbackForms(messages: { messages: { parts?: MessagePart[] }[] } | undefined, sessionId: string): QuestionForm[] {
   const built: QuestionForm[] = [];
   const seen = new Set<string>();
@@ -135,6 +147,7 @@ function fallbackForms(messages: { messages: { parts?: MessagePart[] }[] } | und
 }
 
 export function ChatPanel({ sessionId }: { sessionId: string }) {
+  const queryClient = useQueryClient();
   useSessionStream(sessionId);
 
   const messagesQuery = useQuery({
@@ -155,7 +168,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
   const [hiddenFallback, setHiddenFallback] = useState<Record<string, true>>({});
   const fallback = useMemo(() => fallbackForms(messagesQuery.data, sessionId), [messagesQuery.data, sessionId]);
   const visibleFallback = forms.length === 0
-    ? fallback.filter((request) => !hiddenFallback[request.id])
+    ? fallback.slice(-1).filter((request) => !hiddenFallback[request.id])
     : [];
 
   // Streamed parts grow the transcript without changing this component's props,
@@ -209,7 +222,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
             })}
           </ul>
         </DataState>
-          {formsError ? (
+          {formsError && visibleFallback.length === 0 ? (
             <div role="alert">
               <p>{getErrorMessage(formsError)}</p>
               <Button onClick={() => refetchForms()}>{S.questions.retry}</Button>
@@ -223,9 +236,11 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
               key={request.id}
               request={request}
               onSubmit={async (answer) => {
-                const text = answerAsMessage(answer);
+                const text = answerForRequest(request, answer);
                 if (!text) return;
                 await sendPrompt({ sessionId, text });
+                queryClient.invalidateQueries({ queryKey: queryKeys.opencode.messages(sessionId) });
+                queryClient.invalidateQueries({ queryKey: queryKeys.opencode.diffs(sessionId) });
                 setHiddenFallback((previous) => ({ ...previous, [request.id]: true }));
               }}
               onDismiss={async () => {
