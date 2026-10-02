@@ -125,8 +125,8 @@ export const queryKeys = {
     forProject: (projectId: string) => ['workspaces', 'project', projectId] as const,
     diff: (userId: string, projectId: string, directory: string) =>
       ['workspaces', 'diff', userId, projectId, directory] as const,
-    diffPatch: (userId: string, projectId: string, directory: string, path: string) =>
-      ['workspaces', 'diff', userId, projectId, directory, path] as const,
+    diffPatch: (userId: string, projectId: string, directory: string, path: string, version: string) =>
+      ['workspaces', 'diff', userId, projectId, directory, path, version] as const,
   },
   env: {
     specs: () => ['env', 'specs'] as const,

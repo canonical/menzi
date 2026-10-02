@@ -132,6 +132,7 @@ export interface TreeChange {
 
 export interface TreeDiff {
   head: string;
+  version: string;
   changes: TreeChange[];
 }
 
@@ -149,9 +150,11 @@ export async function workspaceFilePatch(
   projectId: string,
   directory: string | undefined,
   path: string,
+  version?: string,
 ): Promise<TreeDiff> {
   const query = new URLSearchParams({ path });
   if (directory) query.set('directory', directory);
+  if (version) query.set('version', version);
   return http.get<TreeDiff>(`${apiPaths.workspaces.diff(userId, projectId)}?${query.toString()}`);
 }
 
