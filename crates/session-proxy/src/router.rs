@@ -5,13 +5,25 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 struct CacheEntry {
-    endpoint: Option<String>,
+    endpoint: Option<RoutedEndpoint>,
     at: Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BasicAuth {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoutedEndpoint {
+    pub endpoint: String,
+    pub auth: Option<BasicAuth>,
 }
 
 #[async_trait]
 pub trait SessionRouter: Send + Sync {
-    async fn endpoint_for(&self, session: &str) -> Option<String>;
+    async fn endpoint_for(&self, session: &str) -> Option<RoutedEndpoint>;
 
     fn bind(&self, _session: &str, _endpoint: &str) {}
 
@@ -20,7 +32,7 @@ pub trait SessionRouter: Send + Sync {
 
 #[derive(Default)]
 pub struct InMemorySessionRouter {
-    entries: Mutex<HashMap<String, String>>,
+    entries: Mutex<HashMap<String, RoutedEndpoint>>,
 }
 
 impl InMemorySessionRouter {
@@ -29,10 +41,20 @@ impl InMemorySessionRouter {
     }
 
     pub fn set(&self, session: impl Into<String>, endpoint: impl Into<String>) {
+        self.entries.lock().expect("session router lock").insert(
+            session.into(),
+            RoutedEndpoint {
+                endpoint: endpoint.into(),
+                auth: None,
+            },
+        );
+    }
+
+    pub fn set_route(&self, session: impl Into<String>, route: RoutedEndpoint) {
         self.entries
             .lock()
             .expect("session router lock")
-            .insert(session.into(), endpoint.into());
+            .insert(session.into(), route);
     }
 
     pub fn remove(&self, session: &str) {
@@ -42,7 +64,7 @@ impl InMemorySessionRouter {
             .remove(session);
     }
 
-    pub fn bound(&self, session: &str) -> Option<String> {
+    pub fn bound(&self, session: &str) -> Option<RoutedEndpoint> {
         self.entries
             .lock()
             .expect("session router lock")
@@ -53,7 +75,7 @@ impl InMemorySessionRouter {
 
 #[async_trait]
 impl SessionRouter for InMemorySessionRouter {
-    async fn endpoint_for(&self, session: &str) -> Option<String> {
+    async fn endpoint_for(&self, session: &str) -> Option<RoutedEndpoint> {
         self.bound(session)
     }
 
@@ -110,16 +132,23 @@ impl WorkspaceRouter {
         format!("/api/v1/sessions/{session}/workspace")
     }
 
-    pub fn parse_response(body: &str) -> Option<String> {
+    pub fn parse_response(body: &str) -> Option<RoutedEndpoint> {
         let value: serde_json::Value = serde_json::from_str(body).ok()?;
-        value
+        let endpoint = value
             .get("endpoint")
             .and_then(|endpoint| endpoint.as_str())
             .map(str::to_string)
-            .filter(|endpoint| !endpoint.is_empty())
+            .filter(|endpoint| !endpoint.is_empty())?;
+        let auth = value.get("auth").and_then(|auth| {
+            Some(BasicAuth {
+                username: auth.get("username")?.as_str()?.to_string(),
+                password: auth.get("password")?.as_str()?.to_string(),
+            })
+        });
+        Some(RoutedEndpoint { endpoint, auth })
     }
 
-    fn cached(&self, session: &str) -> Option<Option<String>> {
+    fn cached(&self, session: &str) -> Option<Option<RoutedEndpoint>> {
         let cache = self.cache.lock().expect("session router lock");
         let entry = cache.get(session)?;
         if entry.at.elapsed() > self.ttl {
@@ -128,7 +157,7 @@ impl WorkspaceRouter {
         Some(entry.endpoint.clone())
     }
 
-    fn remember(&self, session: &str, endpoint: Option<String>) -> Option<String> {
+    fn remember(&self, session: &str, endpoint: Option<RoutedEndpoint>) -> Option<RoutedEndpoint> {
         self.cache.lock().expect("session router lock").insert(
             session.to_string(),
             CacheEntry {
@@ -142,7 +171,7 @@ impl WorkspaceRouter {
 
 #[async_trait]
 impl SessionRouter for WorkspaceRouter {
-    async fn endpoint_for(&self, session: &str) -> Option<String> {
+    async fn endpoint_for(&self, session: &str) -> Option<RoutedEndpoint> {
         if let Some(cached) = self.cached(session) {
             return cached;
         }
@@ -344,7 +373,10 @@ mod tests {
         router.set("ses_1", "http://10.0.0.1:17999");
         assert_eq!(
             router.bound("ses_1"),
-            Some("http://10.0.0.1:17999".to_string())
+            Some(RoutedEndpoint {
+                endpoint: "http://10.0.0.1:17999".to_string(),
+                auth: None,
+            })
         );
         router.remove("ses_1");
         assert_eq!(router.bound("ses_1"), None);
@@ -357,7 +389,10 @@ mod tests {
         bound.bind("ses_1", "http://10.0.0.4:17999");
         assert_eq!(
             bound.endpoint_for("ses_1").await,
-            Some("http://10.0.0.4:17999".to_string())
+            Some(RoutedEndpoint {
+                endpoint: "http://10.0.0.4:17999".to_string(),
+                auth: None,
+            })
         );
         bound.unbind("ses_1");
         assert_eq!(bound.endpoint_for("ses_1").await, None);
@@ -367,8 +402,14 @@ mod tests {
     async fn the_resolver_answers_from_the_binding() {
         let router = InMemorySessionRouter::new();
         router.set("ses_1", "http://10.0.0.2:17999");
-        let resolved: Option<String> = SessionRouter::endpoint_for(&router, "ses_1").await;
-        assert_eq!(resolved, Some("http://10.0.0.2:17999".to_string()));
+        let resolved = SessionRouter::endpoint_for(&router, "ses_1").await;
+        assert_eq!(
+            resolved,
+            Some(RoutedEndpoint {
+                endpoint: "http://10.0.0.2:17999".to_string(),
+                auth: None,
+            })
+        );
     }
 
     #[test]
@@ -384,7 +425,10 @@ mod tests {
         let body = r#"{"workspace_id":"wsp-1","endpoint":"http://10.0.0.2:17999"}"#;
         assert_eq!(
             WorkspaceRouter::parse_response(body),
-            Some("http://10.0.0.2:17999".to_string())
+            Some(RoutedEndpoint {
+                endpoint: "http://10.0.0.2:17999".to_string(),
+                auth: None,
+            })
         );
     }
 
@@ -393,6 +437,21 @@ mod tests {
         assert_eq!(WorkspaceRouter::parse_response(r#"{"endpoint":""}"#), None);
         assert_eq!(WorkspaceRouter::parse_response("not json"), None);
         assert_eq!(WorkspaceRouter::parse_response("{}"), None);
+    }
+
+    #[test]
+    fn the_workspace_response_can_carry_basic_auth() {
+        let body = r#"{"endpoint":"http://10.0.0.2:17999","auth":{"username":"opencode","password":"pw"}}"#;
+        assert_eq!(
+            WorkspaceRouter::parse_response(body),
+            Some(RoutedEndpoint {
+                endpoint: "http://10.0.0.2:17999".to_string(),
+                auth: Some(BasicAuth {
+                    username: "opencode".to_string(),
+                    password: "pw".to_string(),
+                }),
+            })
+        );
     }
 
     #[tokio::test]
@@ -459,11 +518,17 @@ mod tests {
         let router = WorkspaceRouter::new(format!("http://{address}"));
         assert_eq!(
             router.endpoint_for("ses_1").await,
-            Some("http://10.0.0.1:17999".to_string())
+            Some(RoutedEndpoint {
+                endpoint: "http://10.0.0.1:17999".to_string(),
+                auth: None,
+            })
         );
         assert_eq!(
             router.endpoint_for("ses_1").await,
-            Some("http://10.0.0.1:17999".to_string())
+            Some(RoutedEndpoint {
+                endpoint: "http://10.0.0.1:17999".to_string(),
+                auth: None,
+            })
         );
         assert_eq!(hits.load(Ordering::SeqCst), 1);
     }

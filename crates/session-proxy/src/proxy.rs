@@ -1,31 +1,31 @@
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
-use futures_util::StreamExt;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use futures_util::SinkExt;
+use futures_util::StreamExt;
 use menzi_common::ids::SessionId;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 use tokio::sync::{broadcast, RwLock};
 use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
 use crate::auth;
 use crate::config::ProxyConfig;
 use crate::fanout::FanoutManager;
 use crate::router::{
-    endpoint_override, is_capability_path, session_from_path, session_hint, InMemorySessionRouter,
-    SessionRouter,
+    endpoint_override, is_capability_path, session_from_path, session_hint, BasicAuth,
+    InMemorySessionRouter, RoutedEndpoint, SessionRouter,
 };
 use crate::transcript::TranscriptArchiver;
 use crate::tunnel::{MessageType, TunnelConnection, TunnelManager, TunnelMessage};
@@ -42,7 +42,7 @@ pub struct ProxyState {
     pub sequence: Arc<AtomicI64>,
     pub events: broadcast::Sender<TunnelMessage>,
     pub router: Arc<dyn SessionRouter>,
-    pub ptys: Arc<Mutex<HashMap<String, String>>>,
+    pub ptys: Arc<Mutex<HashMap<String, RoutedEndpoint>>>,
 }
 
 impl ProxyState {
@@ -70,13 +70,19 @@ impl ProxyState {
         self
     }
 
-    pub async fn target_for(&self, headers: &HeaderMap, path: &str) -> Option<String> {
+    pub async fn target_for(&self, headers: &HeaderMap, path: &str) -> Option<RoutedEndpoint> {
         if let Some(endpoint) = endpoint_override(headers) {
-            return Some(endpoint);
+            return Some(RoutedEndpoint {
+                endpoint,
+                auth: None,
+            });
         }
         match session_from_path(path) {
             Some(session) => self.target_for_session(&session).await,
-            None => Some(self.fallback().await),
+            None => Some(RoutedEndpoint {
+                endpoint: self.fallback().await,
+                auth: None,
+            }),
         }
     }
 
@@ -92,7 +98,7 @@ impl ProxyState {
         *self.shared.write().await = url.into();
     }
 
-    pub async fn target_for_session(&self, session: &str) -> Option<String> {
+    pub async fn target_for_session(&self, session: &str) -> Option<RoutedEndpoint> {
         if session.is_empty() {
             return None;
         }
@@ -379,19 +385,30 @@ async fn stream_upstream_event(
     headers: HeaderMap,
     Query(query): Query<EventStreamQuery>,
 ) -> Response {
-    let target = match endpoint_override(&headers) {
-        Some(endpoint) => endpoint,
+    let route = match endpoint_override(&headers) {
+        Some(endpoint) => RoutedEndpoint {
+            endpoint,
+            auth: None,
+        },
         None => match state
             .target_for_session(query.session.as_deref().unwrap_or_default())
             .await
         {
-            Some(endpoint) => endpoint,
-            None => state.opencode_url.read().await.clone(),
+            Some(route) => route,
+            None => RoutedEndpoint {
+                endpoint: state.opencode_url.read().await.clone(),
+                auth: upstream_credentials()
+                    .map(|(username, password)| BasicAuth { username, password }),
+            },
         },
     };
-    let url = format!("{target}/api/event");
+    let url = format!("{}/api/event", route.endpoint);
 
-    let upstream = match state.http.get(&url).send().await {
+    let mut request = state.http.get(&url);
+    if let Some(auth) = route.auth {
+        request = request.basic_auth(auth.username, Some(auth.password));
+    }
+    let upstream = match request.send().await {
         Ok(response) => response,
         Err(error) => {
             return (
@@ -453,19 +470,19 @@ fn ws_target(target: &str) -> String {
     target.to_string()
 }
 
-fn remember_pty(state: &ProxyState, pty_id: &str, endpoint: &str) {
+fn remember_pty(state: &ProxyState, pty_id: &str, route: &RoutedEndpoint) {
     state
         .ptys
         .lock()
         .expect("pty route lock")
-        .insert(pty_id.to_string(), endpoint.to_string());
+        .insert(pty_id.to_string(), route.clone());
 }
 
 fn remove_pty(state: &ProxyState, pty_id: &str) {
     state.ptys.lock().expect("pty route lock").remove(pty_id);
 }
 
-fn pty_target(state: &ProxyState, pty_id: &str) -> Option<String> {
+fn pty_target(state: &ProxyState, pty_id: &str) -> Option<RoutedEndpoint> {
     state
         .ptys
         .lock()
@@ -508,36 +525,49 @@ async fn forward(
     let capability_session = session_hint(uri.path(), query.as_deref());
     let session = path_session.clone().or(capability_session.clone());
 
-    let override_target = endpoint_override(&headers);
-    let mapped_pty_target = pty_id_from_path(uri.path()).and_then(|pty_id| pty_target(&state, &pty_id));
+    let override_target = endpoint_override(&headers).map(|endpoint| RoutedEndpoint {
+        endpoint,
+        auth: None,
+    });
+    let mapped_pty_target =
+        pty_id_from_path(uri.path()).and_then(|pty_id| pty_target(&state, &pty_id));
 
     let target = match override_target.clone() {
         Some(override_endpoint) => override_endpoint,
         None => match mapped_pty_target {
             Some(mapped) => mapped,
             None => match (
-            session,
-            is_capability_path(uri.path()),
-            path_session.is_some(),
-        ) {
-            (Some(session), _, _) => match state.target_for_session(&session).await {
-                Some(endpoint) => endpoint,
-                None => return not_found(),
+                session,
+                is_capability_path(uri.path()),
+                path_session.is_some(),
+            ) {
+                (Some(session), _, _) => match state.target_for_session(&session).await {
+                    Some(endpoint) => endpoint,
+                    None => return not_found(),
+                },
+                (None, true, false) => match state.shared_endpoint().await {
+                    Some(url) => RoutedEndpoint {
+                        endpoint: url,
+                        auth: upstream_credentials()
+                            .map(|(username, password)| BasicAuth { username, password }),
+                    },
+                    None => return not_found(),
+                },
+                (None, _, true) => return not_found(),
+                (None, _, false) => RoutedEndpoint {
+                    endpoint: state.fallback().await,
+                    auth: upstream_credentials()
+                        .map(|(username, password)| BasicAuth { username, password }),
+                },
             },
-            (None, true, false) => match state.shared_endpoint().await {
-                Some(url) => url,
-                None => return not_found(),
-            },
-            (None, _, true) => return not_found(),
-            (None, _, false) => state.fallback().await,
-        }},
+        },
     };
 
     let path_and_query = uri
         .path_and_query()
         .map(|value| value.as_str())
         .unwrap_or(uri.path());
-    let url = format!("{target}{path_and_query}");
+    let url = format!("{}{path_and_query}", target.endpoint);
 
     let mut builder = state.http.request(method.clone(), url);
     for (name, value) in auth::strip_identity(&headers).iter() {
@@ -550,7 +580,9 @@ async fn forward(
         }
         builder = builder.header(name, value);
     }
-    if let Some(credentials) = upstream_credentials() {
+    if let Some(auth) = target.auth.clone() {
+        builder = builder.basic_auth(auth.username, Some(auth.password));
+    } else if let Some(credentials) = upstream_credentials() {
         builder = builder.basic_auth(credentials.0, Some(credentials.1));
     }
     let upstream = match builder.body(body).send().await {
@@ -628,15 +660,28 @@ async fn connect_pty(
             .into_response();
     }
     let target = if let Some(override_endpoint) = endpoint_override(&headers) {
-        remember_pty(&state, &pty_id, &override_endpoint);
-        override_endpoint
+        let route = RoutedEndpoint {
+            endpoint: override_endpoint,
+            auth: None,
+        };
+        remember_pty(&state, &pty_id, &route);
+        route
     } else if let Some(mapped) = pty_target(&state, &pty_id) {
         mapped
     } else {
         return not_found();
     };
-    let upstream = format!("{}{}", ws_target(&target), uri.path_and_query().map(|v| v.as_str()).unwrap_or(uri.path()));
-    let credentials = upstream_credentials();
+    let upstream = format!(
+        "{}{}",
+        ws_target(&target.endpoint),
+        uri.path_and_query()
+            .map(|v| v.as_str())
+            .unwrap_or(uri.path())
+    );
+    let credentials = target
+        .auth
+        .map(|auth| (auth.username, auth.password))
+        .or_else(upstream_credentials);
 
     ws.on_upgrade(move |socket| async move {
         proxy_websocket(socket, upstream, credentials).await;
