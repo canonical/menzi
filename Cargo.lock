@@ -1872,6 +1872,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.21",
  "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -1915,6 +1916,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.21",
  "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -1978,6 +1980,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.21",
  "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -2089,6 +2092,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.21",
  "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]

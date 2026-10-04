@@ -12,6 +12,7 @@ pub mod modules;
 #[openapi(
     paths(
         modules::health::health_check,
+        modules::health::ready_check,
         modules::projects::list_projects,
         modules::projects::create_project,
         modules::projects::get_project,
@@ -19,6 +20,7 @@ pub mod modules;
     components(
         schemas(
             modules::health::HealthResponse,
+            modules::health::ReadyResponse,
             modules::projects::ProjectResponse,
             modules::projects::CreateProjectRequest,
         ),
@@ -94,6 +96,7 @@ pub fn create_router(auth: Arc<auth::AuthState>) -> Router<PgPool> {
         ));
     Router::new()
         .route("/health", get(modules::health::health_check))
+        .route("/ready", get(modules::health::ready_check))
         .merge(auth::handlers::merge(auth))
         .merge(application)
         .layer(axum::middleware::from_fn(
@@ -127,12 +130,21 @@ mod tests {
     fn api_doc_generates() {
         let doc = ApiDoc::openapi();
         assert!(doc.paths.paths.contains_key("/health"));
+        assert!(doc.paths.paths.contains_key("/ready"));
         assert!(doc.paths.paths.contains_key("/api/v1/projects"));
     }
 
     #[tokio::test]
     async fn the_health_check_is_public() {
         assert_eq!(call(router(), "/health").await, axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_ready_check_reports_degraded_without_database() {
+        assert_eq!(
+            call(router(), "/ready").await,
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 
     #[tokio::test]

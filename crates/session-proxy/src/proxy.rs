@@ -103,6 +103,7 @@ impl ProxyState {
 pub fn create_router(state: ProxyState) -> Router {
     Router::new()
         .route("/health", get(health_check))
+        .route("/ready", get(ready_check))
         .route("/api/opencode/register", post(register_opencode))
         .route("/api/opencode/bind", post(bind_session))
         .route("/api/tunnel/register", post(register_tunnel))
@@ -130,6 +131,10 @@ async fn health_check(State(state): State<ProxyState>) -> Response {
         })),
     )
         .into_response()
+}
+
+async fn ready_check() -> Response {
+    (StatusCode::OK, Json(json!({"status": "ready"}))).into_response()
 }
 
 async fn register_opencode(
@@ -1819,6 +1824,24 @@ mod tests {
             .await
             .unwrap();
         assert!(body_string(response).await.contains("http://shared:4096"));
+    }
+
+    #[tokio::test]
+    async fn ready_check_returns_ok() {
+        let state = test_state();
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(body_string(response).await.contains("\"status\":\"ready\""));
     }
 
     #[tokio::test]
