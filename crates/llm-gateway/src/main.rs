@@ -17,8 +17,7 @@ async fn main() {
         "openrouter",
     );
 
-    if std::env::var("MENZI_LLM_STATE_BACKEND")
-        .unwrap_or_else(|_| "postgres".to_string())
+    if std::env::var("MENZI_LLM_STATE_BACKEND").unwrap_or_else(|_| "postgres".to_string())
         == "postgres"
     {
         match sqlx::postgres::PgPoolOptions::new()
@@ -35,7 +34,9 @@ async fn main() {
                     state = state.with_store(std::sync::Arc::new(store));
                 }
             }
-            Err(error) => tracing::warn!("database unavailable, llm state stays in memory: {error}"),
+            Err(error) => {
+                tracing::warn!("database unavailable, llm state stays in memory: {error}")
+            }
         }
     }
 

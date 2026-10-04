@@ -103,12 +103,7 @@ impl GatewayStateStore for InMemoryGatewayStateStore {
     }
 
     async fn budget(&self, key: &str) -> Result<Option<BudgetStatus>> {
-        Ok(self
-            .budgets
-            .lock()
-            .expect("budget lock")
-            .get(key)
-            .cloned())
+        Ok(self.budgets.lock().expect("budget lock").get(key).cloned())
     }
 
     async fn record_usage(&self, _key: &str, _record: &UsageRecord) -> Result<()> {
@@ -150,7 +145,10 @@ impl GatewayStateStore for PostgresGatewayStateStore {
         };
         let denied_models: Vec<String> =
             serde_json::from_value(denied).unwrap_or_else(|_| Vec::new());
-        if denied_models.iter().any(|pattern| model_matches(model, pattern)) {
+        if denied_models
+            .iter()
+            .any(|pattern| model_matches(model, pattern))
+        {
             return Ok(false);
         }
         let allowed_models: Vec<String> =
