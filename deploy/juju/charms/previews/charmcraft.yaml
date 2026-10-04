@@ -1,0 +1,24 @@
+type: charm
+name: previews
+title: Menzi previews
+summary: Menzi previews service charm
+description: Juju machine charm for Menzi previews service.
+base: ubuntu@26.04
+platforms:
+  amd64:
+assumes:
+  - juju >= 3.5
+provides:
+  website:
+    interface: http
+requires:
+  database:
+    interface: postgresql_client
+  lxd:
+    interface: lxd
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv

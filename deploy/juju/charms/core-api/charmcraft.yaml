@@ -1,0 +1,22 @@
+type: charm
+name: core-api
+title: Menzi core-api
+summary: Menzi core-api service charm
+description: Juju machine charm for Menzi core-api service.
+base: ubuntu@26.04
+platforms:
+  amd64:
+assumes:
+  - juju >= 3.5
+provides:
+  website:
+    interface: http
+requires:
+  database:
+    interface: postgresql_client
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv

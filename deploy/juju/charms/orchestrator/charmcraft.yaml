@@ -1,0 +1,24 @@
+type: charm
+name: orchestrator
+title: Menzi orchestrator
+summary: Menzi orchestrator service charm
+description: Juju machine charm for Menzi orchestrator service.
+base: ubuntu@26.04
+platforms:
+  amd64:
+assumes:
+  - juju >= 3.5
+provides:
+  website:
+    interface: http
+requires:
+  nats:
+    interface: nats
+  lxd:
+    interface: lxd
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv

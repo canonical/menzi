@@ -1,0 +1,19 @@
+type: charm
+name: session-proxy
+title: Menzi session-proxy
+summary: Menzi session-proxy service charm
+description: Juju machine charm for Menzi session-proxy service.
+base: ubuntu@26.04
+platforms:
+  amd64:
+assumes:
+  - juju >= 3.5
+provides:
+  website:
+    interface: http
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv

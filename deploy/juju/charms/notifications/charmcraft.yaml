@@ -1,0 +1,19 @@
+type: charm
+name: notifications
+title: Menzi notifications
+summary: Menzi notifications service charm
+description: Juju machine charm for Menzi notifications service.
+base: ubuntu@26.04
+platforms:
+  amd64:
+assumes:
+  - juju >= 3.5
+provides:
+  website:
+    interface: http
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv

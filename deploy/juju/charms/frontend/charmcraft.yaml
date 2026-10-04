@@ -1,0 +1,19 @@
+type: charm
+name: frontend
+title: Menzi frontend
+summary: Menzi frontend service charm
+description: Juju machine charm for Menzi frontend service.
+base: ubuntu@26.04
+platforms:
+  amd64:
+assumes:
+  - juju >= 3.5
+provides:
+  website:
+    interface: http
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv

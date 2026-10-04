@@ -1,0 +1,24 @@
+type: charm
+name: llm-gateway
+title: Menzi llm-gateway
+summary: Menzi llm-gateway service charm
+description: Juju machine charm for Menzi llm-gateway service.
+base: ubuntu@26.04
+platforms:
+  amd64:
+assumes:
+  - juju >= 3.5
+provides:
+  website:
+    interface: http
+requires:
+  database:
+    interface: postgresql_client
+  nats:
+    interface: nats
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv
