@@ -37,6 +37,13 @@ impl BudgetManager {
     pub fn set_budget(&mut self, key: String, budget: BudgetStatus) {
         self.budgets.insert(key, budget);
     }
+
+    pub fn export(&self) -> Vec<(String, BudgetStatus)> {
+        self.budgets
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
 }
 
 impl Default for BudgetManager {

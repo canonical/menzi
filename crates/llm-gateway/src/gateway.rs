@@ -6,20 +6,20 @@ use axum::{Json, Router};
 use menzi_auth::tenant::{TenantContext, HEADER_PROJECT_ID, HEADER_SESSION_ID};
 use menzi_common::ids::{ProjectId, SessionId, UserId};
 use serde_json::json;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use super::adapters::*;
 use super::audit::*;
 use super::budgets::*;
 use super::cost::*;
 use super::policy::*;
+use super::state_store::*;
 use super::types::*;
 
 #[derive(Clone)]
 pub struct GatewayState {
     pub factory: Arc<ProviderAdapterFactory>,
-    pub policy: Arc<PolicyEngine>,
-    pub budgets: Arc<Mutex<BudgetManager>>,
+    pub store: Arc<dyn GatewayStateStore>,
     pub cost: Arc<CostCalculator>,
     pub audit: Arc<AuditLogger>,
     pub default_provider: String,
@@ -34,23 +34,55 @@ impl GatewayState {
         audit: AuditLogger,
         default_provider: impl Into<String>,
     ) -> Self {
+        let mut store = InMemoryGatewayStateStore::new();
+        for (scope, config) in policy.export() {
+            store = store.with_policy(scope, config);
+        }
+        for (key, budget) in budgets.export() {
+            store = store.with_budget(key, budget);
+        }
         Self {
             factory: Arc::new(factory),
-            policy: Arc::new(policy),
-            budgets: Arc::new(Mutex::new(budgets)),
+            store: Arc::new(store),
             cost: Arc::new(cost),
             audit: Arc::new(audit),
             default_provider: default_provider.into(),
         }
     }
+
+    pub fn with_store(mut self, store: Arc<dyn GatewayStateStore>) -> Self {
+        self.store = store;
+        self
+    }
+
+    pub async fn budget(&self, key: &str) -> Option<BudgetStatus> {
+        self.store.budget(key).await.ok().flatten()
+    }
 }
 
 pub fn create_router(state: GatewayState) -> Router {
     Router::new()
+        .route("/health", get(health_check))
+        .route("/ready", get(ready_check))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/embeddings", post(embeddings))
         .route("/v1/models", get(list_models))
         .with_state(state)
+}
+
+async fn health_check() -> Response {
+    (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
+}
+
+async fn ready_check(State(state): State<GatewayState>) -> Response {
+    match state.store.budget("global").await {
+        Ok(_) => (StatusCode::OK, Json(json!({"status": "ready"}))).into_response(),
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status": "degraded", "error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 fn provider_for_model(model: &str, default: &str) -> String {
@@ -108,7 +140,18 @@ async fn chat_completions(
 ) -> Response {
     let scope = request_scope(&headers);
 
-    if !state.policy.is_model_allowed(&scope, &request.model) {
+    let allowed_policy = match state.store.is_model_allowed(&scope, &request.model).await {
+        Ok(allowed) => allowed,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": error.to_string()})),
+            )
+                .into_response();
+        }
+    };
+
+    if !allowed_policy {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error": "model not allowed by policy"})),
@@ -136,11 +179,18 @@ async fn chat_completions(
         .unwrap_or_default();
     let estimated_tokens = state.cost.estimate_tokens(&estimate_source);
     let estimated_cost = state.cost.calculate(estimated_tokens, 0, &request.model);
-    let allowed = {
-        let budgets = state.budgets.lock().expect("budgets lock");
-        budgets.can_spend(&budget_key(&headers), estimated_cost)
+    let budget_scope = budget_key(&headers);
+    let allowed_budget = match state.store.can_spend(&budget_scope, estimated_cost).await {
+        Ok(allowed) => allowed,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": error.to_string()})),
+            )
+                .into_response();
+        }
     };
-    if !allowed {
+    if !allowed_budget {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({"error": "budget exceeded"})),
@@ -155,9 +205,13 @@ async fn chat_completions(
                 response.usage.completion_tokens,
                 &request.model,
             );
-            let mut budgets = state.budgets.lock().expect("budgets lock");
-            budgets.record_spend(&budget_key(&headers), actual_cost);
-            drop(budgets);
+            if let Err(error) = state.store.record_spend(&budget_scope, actual_cost).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": error.to_string()})),
+                )
+                    .into_response();
+            }
 
             let (project_id, user_id) = tenant_ids(&headers);
             let record = state.audit.log_request(LogRequestParams {
@@ -171,6 +225,13 @@ async fn chat_completions(
                 output_tokens: response.usage.completion_tokens,
                 cost: actual_cost,
             });
+            if let Err(error) = state.store.record_usage(&budget_scope, &record).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": error.to_string()})),
+                )
+                    .into_response();
+            }
             tracing::debug!("usage recorded: {:?}", record);
             (StatusCode::OK, Json(response)).into_response()
         }
@@ -300,6 +361,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn health_and_ready_endpoints_are_available() {
+        let (app, _state) = gateway().await;
+        let health = app
+            .clone()
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
+
+        let ready = app
+            .oneshot(Request::builder().uri("/ready").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(ready.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn chat_completions_forwards_and_records_spend() {
         let (app, state) = gateway().await;
         let response = app
@@ -324,10 +402,7 @@ mod tests {
         let body = body_string(response).await;
         assert!(body.contains("chatcmpl-fake"));
 
-        let spent = {
-            let budgets = state.budgets.lock().unwrap();
-            budgets.check_budget("global").unwrap().spent_usd
-        };
+        let spent = state.budget("global").await.unwrap().spent_usd;
         assert!(spent > 0.0);
     }
 
@@ -367,20 +442,20 @@ mod tests {
     #[tokio::test]
     async fn chat_completions_blocks_when_budget_exhausted() {
         let (app, state) = gateway().await;
-        {
-            let mut budgets = state.budgets.lock().unwrap();
-            budgets.set_budget(
-                "global".to_string(),
-                BudgetStatus {
-                    project_id: None,
-                    user_id: None,
-                    session_id: None,
-                    feature: "coding".to_string(),
-                    spent_usd: 100.0,
-                    budget_usd: 100.0,
-                },
-            );
-        }
+        let mut store = InMemoryGatewayStateStore::new();
+        store = store.with_budget(
+            "global".to_string(),
+            BudgetStatus {
+                project_id: None,
+                user_id: None,
+                session_id: None,
+                feature: "coding".to_string(),
+                spent_usd: 1.0,
+                budget_usd: 0.0,
+            },
+        );
+        let state = state.with_store(Arc::new(store));
+        let app = create_router(state);
         let long_prompt = "a".repeat(400);
         let response = app
             .oneshot(
@@ -453,20 +528,20 @@ mod tests {
         let (app, state) = gateway().await;
         let project_a = ProjectId::new();
         let scope_a = format!("project:{project_a}");
-        {
-            let mut budgets = state.budgets.lock().unwrap();
-            budgets.set_budget(
-                scope_a,
-                BudgetStatus {
-                    project_id: Some(project_a),
-                    user_id: None,
-                    session_id: None,
-                    feature: "coding".to_string(),
-                    spent_usd: 100.0,
-                    budget_usd: 100.0,
-                },
-            );
-        }
+        let mut store = InMemoryGatewayStateStore::new();
+        store = store.with_budget(
+            scope_a,
+            BudgetStatus {
+                project_id: Some(project_a),
+                user_id: None,
+                session_id: None,
+                feature: "coding".to_string(),
+                spent_usd: 100.0,
+                budget_usd: 100.0,
+            },
+        );
+        let state = state.with_store(Arc::new(store));
+        let app = create_router(state);
 
         let response = app
             .clone()
@@ -481,6 +556,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn shared_store_is_visible_to_all_replicas() {
+        let (_app, state_a) = gateway().await;
+        let (_app, state_b) = gateway().await;
+        let project_id = ProjectId::new();
+        let scope = format!("project:{project_id}");
+        let mut store = InMemoryGatewayStateStore::new();
+        store = store.with_budget(
+            scope,
+            BudgetStatus {
+                project_id: Some(project_id),
+                user_id: None,
+                session_id: None,
+                feature: "coding".to_string(),
+                spent_usd: 1.0,
+                budget_usd: 0.0,
+            },
+        );
+        let shared: Arc<dyn GatewayStateStore> = Arc::new(store);
+        let app_a = create_router(state_a.with_store(shared.clone()));
+        let app_b = create_router(state_b.with_store(shared));
+
+        let response_a = app_a
+            .clone()
+            .oneshot(tenant_request("/v1/chat/completions", project_id))
+            .await
+            .unwrap();
+        assert_eq!(response_a.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let response_b = app_b
+            .oneshot(tenant_request("/v1/chat/completions", project_id))
+            .await
+            .unwrap();
+        assert_eq!(response_b.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

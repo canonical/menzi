@@ -43,6 +43,13 @@ impl PolicyEngine {
     pub fn get_classification(&self, project_id: &str) -> Option<DataClassification> {
         self.configs.get(project_id).map(|c| c.data_classification)
     }
+
+    pub fn export(&self) -> Vec<(String, PolicyConfig)> {
+        self.configs
+            .iter()
+            .map(|(scope, config)| (scope.clone(), config.clone()))
+            .collect()
+    }
 }
 
 impl Default for PolicyEngine {
