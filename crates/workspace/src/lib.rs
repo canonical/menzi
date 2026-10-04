@@ -1,4 +1,5 @@
 pub mod api;
+pub mod credentials;
 pub mod driver;
 pub mod gateway;
 pub mod identity;
@@ -8,6 +9,7 @@ pub mod registry;
 pub mod store;
 pub mod types;
 
+pub use credentials::{OpencodeAuth, WorkspaceCredentialManager};
 pub use driver::{LxdWorkspaceDriver, ProvisionOutcome, WorkspaceDriver};
 pub use gateway::{HttpOpencodeGateway, OpencodeGateway};
 pub use identity::{Authorizer, MembershipAuthorizer, PermissiveAuthorizer, Principal};

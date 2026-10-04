@@ -15,6 +15,10 @@ pub struct Workspace {
     pub last_error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(skip_serializing, skip_deserializing, default)]
+    pub opencode_username: Option<String>,
+    #[serde(skip_serializing, skip_deserializing, default)]
+    pub opencode_password_encrypted: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

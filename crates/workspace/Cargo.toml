@@ -20,6 +20,8 @@ reqwest.workspace = true
 async-trait.workspace = true
 sqlx.workspace = true
 sha2 = "0.10"
+aes-gcm = "0.10"
+base64.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

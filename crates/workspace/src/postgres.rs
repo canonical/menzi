@@ -20,6 +20,8 @@ struct Row0 {
     last_error: Option<String>,
     created_at: String,
     updated_at: String,
+    opencode_username: Option<String>,
+    opencode_password_encrypted: Option<String>,
 }
 
 fn map(row: &sqlx::postgres::PgRow) -> Result<Row0> {
@@ -74,6 +76,24 @@ fn map(row: &sqlx::postgres::PgRow) -> Result<Row0> {
             .try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
             .map_err(|e| MenziError::Database(e.to_string()))?
             .to_rfc3339(),
+        opencode_username: row
+            .try_get::<serde_json::Value, _>("metadata")
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("opencode_username")
+                    .and_then(|username| username.as_str())
+                    .map(str::to_string)
+            }),
+        opencode_password_encrypted: row
+            .try_get::<serde_json::Value, _>("metadata")
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("opencode_password_encrypted")
+                    .and_then(|password| password.as_str())
+                    .map(str::to_string)
+            }),
     })
 }
 
@@ -102,6 +122,8 @@ fn into_workspace(row: Row0) -> Workspace {
         last_error: row.last_error,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        opencode_username: row.opencode_username,
+        opencode_password_encrypted: row.opencode_password_encrypted,
     }
 }
 
@@ -150,6 +172,8 @@ impl WorkspaceStore for PostgresWorkspaceStore {
         let metadata = serde_json::json!({
             "opencode_endpoint": workspace.endpoint,
             "last_error": workspace.last_error,
+            "opencode_username": workspace.opencode_username,
+            "opencode_password_encrypted": workspace.opencode_password_encrypted,
         });
         let status = workspace.status.to_string();
         let deleted = status == "deleted";
