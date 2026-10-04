@@ -10,7 +10,7 @@ if ! pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
   sudo systemctl start postgresql
 fi
 
-sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+sudo -u postgres psql -q -v ON_ERROR_STOP=1 <<'SQL'
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'menzi') THEN
@@ -19,6 +19,7 @@ BEGIN
 END
 $$;
 SQL
+echo "postgres setup: ensured role 'menzi' exists"
 
 if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'menzi'" | grep -q 1; then
   sudo -u postgres createdb -O menzi menzi
@@ -62,6 +63,11 @@ if command -v lxc >/dev/null 2>&1; then
     | grep -qxF "$fp"; then
     sudo lxc config trust add "$HOME/.config/lxc/client.crt" && echo "trusted the lxd client certificate"
   fi
+  current_lxd_addr="$(sudo lxc config get core.https_address 2>/dev/null || true)"
+  if [ "$current_lxd_addr" != "127.0.0.1:8443" ]; then
+    sudo lxc config set core.https_address 127.0.0.1:8443
+  fi
+  echo "lxd setup: API listening on https://127.0.0.1:8443"
   export MENZI_LXD_CERT_PATH="${MENZI_LXD_CERT_PATH:-$HOME/.config/lxc/client.crt}"
   export MENZI_LXD_KEY_PATH="${MENZI_LXD_KEY_PATH:-$HOME/.config/lxc/client.key}"
   export MENZI_LXD_URL="${MENZI_LXD_URL:-https://127.0.0.1:8443}"

@@ -10,6 +10,15 @@ fi
 
 "$ROOT/infra/local/setup.sh"
 
+if ! lxc info "${MENZI_SOURCE_INSTANCE:-mz-workspace}" >/dev/null 2>&1 \
+  && ! sudo lxc info "${MENZI_SOURCE_INSTANCE:-mz-workspace}" >/dev/null 2>&1; then
+  echo "error: LXD template '${MENZI_SOURCE_INSTANCE:-mz-workspace}' is missing." >&2
+  echo "build it once with:" >&2
+  echo "  sudo MENZI_WORKSPACE_PROFILE=default infra/local/workspace-image.sh" >&2
+  echo "note: this needs an opencode v1 binary; v2 requires auth and will fail workspace startup" >&2
+  exit 1
+fi
+
 DEV_HOST="${MENZI_DEV_HOST:-127.0.0.1}"
 OPEN=0
 while [ "$#" -gt 0 ]; do
@@ -46,6 +55,7 @@ OPENCODE_PORT="${MENZI_OPENCODE_PORT:-17999}"
 STUB_MODEL_PORT="${MENZI_STUB_MODEL_PORT:-18000}"
 VITE_PORT="${MENZI_VITE_PORT:-5173}"
 DB_URL="${MENZI_DATABASE_URL:-postgres://menzi:menzi@127.0.0.1:5432/menzi}"
+LXD_URL="${MENZI_LXD_URL:-https://127.0.0.1:8443}"
 
 LOG_DIR="$ROOT/target/dev"
 mkdir -p "$LOG_DIR"
@@ -66,6 +76,7 @@ fi
 # a login page look broken in front of a demo.
 export MENZI_REGISTRATION_MODE="${MENZI_REGISTRATION_MODE:-open}"
 export MENZI_PUBLIC_BASE_URL="${MENZI_PUBLIC_BASE_URL:-http://${DEV_HOST}:${VITE_PORT}}"
+export MENZI_LXD_URL="$LXD_URL"
 
 if [ "${MENZI_DEV_AUTH:-0}" = "1" ] && [ -z "${MENZI_DEV_USER_ID:-}" ]; then
   DEV_USER_ID="$(PGPASSWORD=menzi psql -tA -h 127.0.0.1 -U menzi -d menzi \
