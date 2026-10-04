@@ -1,0 +1,96 @@
+bundle: menzi-ha
+description: Menzi HA machine charm bundle
+applications:
+  haproxy:
+    charm: haproxy
+    channel: latest/stable
+    num_units: 2
+
+  postgresql:
+    charm: postgresql
+    channel: 16/stable
+    num_units: 3
+
+  nats:
+    charm: nats
+    channel: stable
+    num_units: 3
+
+  lxd:
+    charm: lxd
+    channel: latest/stable
+    num_units: 3
+
+  frontend:
+    charm: ./charms/frontend/frontend_amd64.charm
+    num_units: 2
+
+  core-api:
+    charm: ./charms/core-api/core-api_amd64.charm
+    num_units: 2
+
+  workspace:
+    charm: ./charms/workspace/workspace_amd64.charm
+    num_units: 2
+
+  orchestrator:
+    charm: ./charms/orchestrator/orchestrator_amd64.charm
+    num_units: 2
+
+  previews:
+    charm: ./charms/previews/previews_amd64.charm
+    num_units: 2
+
+  session-proxy:
+    charm: ./charms/session-proxy/session-proxy_amd64.charm
+    num_units: 2
+
+  llm-gateway:
+    charm: ./charms/llm-gateway/llm-gateway_amd64.charm
+    num_units: 2
+
+  git-integration:
+    charm: ./charms/git-integration/git-integration_amd64.charm
+    num_units: 2
+
+  notifications:
+    charm: ./charms/notifications/notifications_amd64.charm
+    num_units: 2
+
+  design-service:
+    charm: ./charms/design-service/design-service_amd64.charm
+    num_units: 2
+
+  workflow:
+    charm: ./charms/workflow/workflow_amd64.charm
+    num_units: 2
+
+  supervisor:
+    charm: ./charms/supervisor/supervisor_amd64.charm
+    num_units: 2
+
+relations:
+  - [core-api:database, postgresql:database]
+  - [workspace:database, postgresql:database]
+  - [previews:database, postgresql:database]
+  - [llm-gateway:database, postgresql:database]
+
+  - [orchestrator:nats, nats:client]
+  - [llm-gateway:nats, nats:client]
+
+  - [workspace:lxd, lxd:lxd]
+  - [orchestrator:lxd, lxd:lxd]
+  - [previews:lxd, lxd:lxd]
+
+  - [haproxy:reverseproxy, frontend:website]
+  - [haproxy:reverseproxy, core-api:website]
+  - [haproxy:reverseproxy, session-proxy:website]
+  - [haproxy:reverseproxy, orchestrator:website]
+  - [haproxy:reverseproxy, llm-gateway:website]
+  - [haproxy:reverseproxy, workspace:website]
+  - [haproxy:reverseproxy, previews:website]
+  - [haproxy:reverseproxy, git-integration:website]
+  - [haproxy:reverseproxy, notifications:website]
+  - [haproxy:reverseproxy, design-service:website]
+  - [haproxy:reverseproxy, workflow:website]
+  - [haproxy:reverseproxy, supervisor:website]
