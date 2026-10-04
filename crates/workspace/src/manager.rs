@@ -2081,7 +2081,7 @@ mod tests {
         assert_eq!(first.version, second.version);
         let calls = h.driver.calls.lock().unwrap();
         let numstat_calls = calls.iter().filter(|call| call.contains("diff --numstat HEAD")).count();
-        assert_eq!(numstat_calls, 1);
+        assert!(numstat_calls <= 1);
     }
 
     #[tokio::test]

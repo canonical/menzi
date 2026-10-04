@@ -73,6 +73,58 @@ struct Wiring {
     sessions: Arc<dyn SessionRegistry>,
     authorizer: Arc<dyn Authorizer>,
     audit: Option<Arc<DbAudit>>,
+    reconcile_gate: Arc<dyn ReconcileGate>,
+}
+
+#[async_trait]
+trait ReconcileGate: Send + Sync {
+    async fn try_acquire(&self) -> Result<bool>;
+    async fn release(&self) -> Result<()>;
+}
+
+struct FreeReconcileGate;
+
+#[async_trait]
+impl ReconcileGate for FreeReconcileGate {
+    async fn try_acquire(&self) -> Result<bool> {
+        Ok(true)
+    }
+
+    async fn release(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+struct PostgresReconcileGate {
+    pool: PgPool,
+    key: i64,
+}
+
+impl PostgresReconcileGate {
+    fn new(pool: PgPool, key: i64) -> Self {
+        Self { pool, key }
+    }
+}
+
+#[async_trait]
+impl ReconcileGate for PostgresReconcileGate {
+    async fn try_acquire(&self) -> Result<bool> {
+        let row: (bool,) = sqlx::query_as("SELECT pg_try_advisory_lock($1)")
+            .bind(self.key)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| MenziError::Database(e.to_string()))?;
+        Ok(row.0)
+    }
+
+    async fn release(&self) -> Result<()> {
+        let _: (bool,) = sqlx::query_as("SELECT pg_advisory_unlock($1)")
+            .bind(self.key)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| MenziError::Database(e.to_string()))?;
+        Ok(())
+    }
 }
 
 async fn pool_from_env() -> Option<PgPool> {
@@ -133,11 +185,16 @@ async fn main() {
             {
                 tracing::warn!("workspace migration failed: {error}");
             }
+            let lock_key = std::env::var("MENZI_WORKSPACE_RECONCILE_LOCK_KEY")
+                .ok()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(81096);
             Wiring {
                 store: Arc::new(menzi_workspace::PostgresWorkspaceStore::new(pool.clone())),
                 sessions: Arc::new(menzi_workspace::PostgresSessionRegistry::new(pool.clone())),
                 authorizer: Arc::new(DbAuthorizer { pool: pool.clone() }),
-                audit: Some(Arc::new(DbAudit { pool })),
+                audit: Some(Arc::new(DbAudit { pool: pool.clone() })),
+                reconcile_gate: Arc::new(PostgresReconcileGate::new(pool.clone(), lock_key)),
             }
         }
         None => Wiring {
@@ -145,6 +202,7 @@ async fn main() {
             sessions: Arc::new(menzi_workspace::registry::registry_noop()),
             authorizer: Arc::new(menzi_workspace::PermissiveAuthorizer),
             audit: None,
+            reconcile_gate: Arc::new(FreeReconcileGate),
         },
     };
 
@@ -169,7 +227,7 @@ async fn main() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
     {
-        spawn_reconciler(manager.clone(), seconds);
+        spawn_reconciler(manager.clone(), wiring.reconcile_gate, seconds);
     }
 
     info!("Listening on {bind}, provisioning from {source_instance}");
@@ -178,10 +236,24 @@ async fn main() {
     axum::serve(listener, app).await.expect("Server failed");
 }
 
-fn spawn_reconciler(manager: Arc<menzi_workspace::WorkspaceManager>, seconds: u64) {
+fn spawn_reconciler(
+    manager: Arc<menzi_workspace::WorkspaceManager>,
+    gate: Arc<dyn ReconcileGate>,
+    seconds: u64,
+) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(seconds)).await;
+            let acquired = match gate.try_acquire().await {
+                Ok(acquired) => acquired,
+                Err(error) => {
+                    tracing::warn!("workspace reconcile lock failed: {error}");
+                    continue;
+                }
+            };
+            if !acquired {
+                continue;
+            }
             match manager.reconcile().await {
                 Ok(report) => {
                     if !report.adopted.is_empty()
@@ -200,6 +272,42 @@ fn spawn_reconciler(manager: Arc<menzi_workspace::WorkspaceManager>, seconds: u6
                 }
                 Err(error) => tracing::warn!("workspace reconcile failed: {error}"),
             }
+            if let Err(error) = gate.release().await {
+                tracing::warn!("workspace reconcile unlock failed: {error}");
+            }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FixedGate {
+        acquire: bool,
+    }
+
+    #[async_trait]
+    impl ReconcileGate for FixedGate {
+        async fn try_acquire(&self) -> Result<bool> {
+            Ok(self.acquire)
+        }
+
+        async fn release(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn free_gate_allows_reconcile() {
+        let gate = FreeReconcileGate;
+        assert!(gate.try_acquire().await.unwrap());
+        gate.release().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fixed_gate_can_block_reconcile() {
+        let gate = FixedGate { acquire: false };
+        assert!(!gate.try_acquire().await.unwrap());
+    }
 }

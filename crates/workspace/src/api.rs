@@ -89,6 +89,8 @@ where
 
 pub fn create_router(state: WorkspaceApiState) -> axum::Router {
     axum::Router::new()
+        .route("/health", get(health_check))
+        .route("/ready", get(ready_check))
         .route("/api/v1/workspaces", post(ensure_workspace))
         .route(
             "/api/v1/workspaces/{user_id}/{project_id}",
@@ -149,6 +151,14 @@ pub fn create_router(state: WorkspaceApiState) -> axum::Router {
             get(session_route),
         )
         .with_state(state)
+}
+
+async fn health_check() -> Response {
+    (StatusCode::OK, Json(json!({ "status": "ok" }))).into_response()
+}
+
+async fn ready_check() -> Response {
+    (StatusCode::OK, Json(json!({ "status": "ready" }))).into_response()
 }
 
 fn server_error(error: MenziError) -> Response {
@@ -643,6 +653,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn health_and_ready_stay_public() {
+        let project = ProjectId::new();
+        let app = open_app(project);
+        let health = app
+            .clone()
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
+
+        let ready = app
+            .oneshot(Request::builder().uri("/ready").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(ready.status(), StatusCode::OK);
     }
 
     #[tokio::test]
