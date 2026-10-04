@@ -83,7 +83,11 @@ impl OrchestratorState {
         self
     }
 
-    pub async fn register_spec(&self, name: &str, spec: EnvironmentSpec) -> menzi_common::Result<()> {
+    pub async fn register_spec(
+        &self,
+        name: &str,
+        spec: EnvironmentSpec,
+    ) -> menzi_common::Result<()> {
         self.specs.register(name, &spec).await
     }
 }
@@ -780,8 +784,10 @@ mod tests {
     #[tokio::test]
     async fn spec_store_is_shared_across_replicas() {
         let store: Arc<dyn SpecStore> = Arc::new(InMemorySpecStore::new());
-        let state_a = OrchestratorState::new(Arc::new(MockDriver::default())).with_spec_store(store.clone());
-        let state_b = OrchestratorState::new(Arc::new(MockDriver::default())).with_spec_store(store);
+        let state_a =
+            OrchestratorState::new(Arc::new(MockDriver::default())).with_spec_store(store.clone());
+        let state_b =
+            OrchestratorState::new(Arc::new(MockDriver::default())).with_spec_store(store);
         state_a.register_spec("dev", dev_spec()).await.unwrap();
 
         let app = create_router(state_b);

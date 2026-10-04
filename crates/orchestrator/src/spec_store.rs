@@ -35,18 +35,19 @@ impl SpecStore for InMemorySpecStore {
     }
 
     async fn names(&self) -> Result<Vec<String>> {
-        let mut names: Vec<String> = self.specs.lock().expect("spec lock").keys().cloned().collect();
+        let mut names: Vec<String> = self
+            .specs
+            .lock()
+            .expect("spec lock")
+            .keys()
+            .cloned()
+            .collect();
         names.sort();
         Ok(names)
     }
 
     async fn get(&self, name: &str) -> Result<Option<EnvironmentSpec>> {
-        Ok(self
-            .specs
-            .lock()
-            .expect("spec lock")
-            .get(name)
-            .cloned())
+        Ok(self.specs.lock().expect("spec lock").get(name).cloned())
     }
 }
 
