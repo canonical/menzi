@@ -31,7 +31,23 @@ async fn main() {
         lease_store,
     )));
 
-    let state = menzi_orchestrator::OrchestratorState::with_gate(driver, gate);
+    let mut state = menzi_orchestrator::OrchestratorState::with_gate(driver, gate);
+    match sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&config.database_url)
+        .await
+    {
+        Ok(pool) => {
+            let store = menzi_orchestrator::PostgresSpecStore::new(pool);
+            if let Err(error) = store.migrate().await {
+                tracing::warn!("orchestrator spec migration failed: {error}");
+            } else {
+                state = state.with_spec_store(Arc::new(store));
+            }
+        }
+        Err(error) => tracing::warn!("database unavailable, specs stay in memory: {error}"),
+    }
 
     let app = menzi_orchestrator::create_router(state);
 

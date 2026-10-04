@@ -5,12 +5,12 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use menzi_common::ids::SessionId;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::drivers::EnvDriver;
 use crate::env_controller::EnvironmentController;
 use crate::gate::{AlwaysFreeGate, WorkGate};
+use crate::spec_store::{InMemorySpecStore, SpecStore};
 use crate::types::EnvironmentSpec;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,7 +60,7 @@ pub struct EnvResponse {
 pub struct OrchestratorState {
     pub driver: Arc<dyn EnvDriver>,
     pub controller: Arc<EnvironmentController>,
-    pub specs: Arc<Mutex<HashMap<String, EnvironmentSpec>>>,
+    pub specs: Arc<dyn SpecStore>,
     pub gate: Arc<dyn WorkGate>,
 }
 
@@ -73,21 +73,25 @@ impl OrchestratorState {
         Self {
             driver,
             controller: Arc::new(EnvironmentController::new()),
-            specs: Arc::new(Mutex::new(HashMap::new())),
+            specs: Arc::new(InMemorySpecStore::new()),
             gate,
         }
     }
 
-    pub fn register_spec(&self, name: &str, spec: EnvironmentSpec) {
-        self.specs
-            .lock()
-            .expect("specs lock")
-            .insert(name.to_string(), spec);
+    pub fn with_spec_store(mut self, specs: Arc<dyn SpecStore>) -> Self {
+        self.specs = specs;
+        self
+    }
+
+    pub async fn register_spec(&self, name: &str, spec: EnvironmentSpec) -> menzi_common::Result<()> {
+        self.specs.register(name, &spec).await
     }
 }
 
 pub fn create_router(state: OrchestratorState) -> Router {
     Router::new()
+        .route("/health", get(health_handler))
+        .route("/ready", get(ready_handler))
         .route("/api/env/health", get(health_handler))
         .route(
             "/api/env/specs",
@@ -105,15 +109,22 @@ async fn health_handler() -> Response {
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))).into_response()
 }
 
+async fn ready_handler(State(state): State<OrchestratorState>) -> Response {
+    match state.specs.names().await {
+        Ok(_) => (StatusCode::OK, Json(serde_json::json!({"status": "ready"}))).into_response(),
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"status": "degraded", "error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 async fn list_specs_handler(State(state): State<OrchestratorState>) -> Response {
-    let mut names: Vec<String> = state
-        .specs
-        .lock()
-        .expect("specs lock")
-        .keys()
-        .cloned()
-        .collect();
-    names.sort();
+    let names = match state.specs.names().await {
+        Ok(names) => names,
+        Err(error) => return internal_error(error),
+    };
     (
         StatusCode::OK,
         Json(EnvResponse {
@@ -125,18 +136,21 @@ async fn list_specs_handler(State(state): State<OrchestratorState>) -> Response 
         .into_response()
 }
 
-fn lookup_spec(
+async fn lookup_spec(
     state: &OrchestratorState,
     environment_name: &str,
     variant: Option<&str>,
 ) -> Option<EnvironmentSpec> {
-    let specs = state.specs.lock().expect("specs lock");
     match variant {
-        Some(variant) => specs
-            .get(&format!("{environment_name}-{variant}"))
-            .cloned()
-            .or_else(|| specs.get(environment_name).cloned()),
-        None => specs.get(environment_name).cloned(),
+        Some(variant) => {
+            let variant_name = format!("{environment_name}-{variant}");
+            if let Ok(Some(spec)) = state.specs.get(&variant_name).await {
+                Some(spec)
+            } else {
+                state.specs.get(environment_name).await.ok().flatten()
+            }
+        }
+        None => state.specs.get(environment_name).await.ok().flatten(),
     }
 }
 
@@ -169,7 +183,9 @@ async fn register_spec_handler(
     Json(spec): Json<EnvironmentSpec>,
 ) -> Response {
     let name = spec.name.clone();
-    state.register_spec(&name, spec);
+    if let Err(error) = state.register_spec(&name, spec).await {
+        return internal_error(error);
+    }
     (
         StatusCode::OK,
         Json(EnvResponse {
@@ -189,7 +205,9 @@ async fn launch_handler(
         &state,
         &request.environment_name,
         request.variant.as_deref(),
-    ) {
+    )
+    .await
+    {
         Some(spec) => spec,
         None => return spec_not_found(&request.environment_name),
     };
@@ -229,7 +247,7 @@ async fn relaunch_handler(
     State(state): State<OrchestratorState>,
     Json(request): Json<EnvRelaunchRequest>,
 ) -> Response {
-    let spec = match lookup_spec(&state, &request.environment_name, None) {
+    let spec = match lookup_spec(&state, &request.environment_name, None).await {
         Some(spec) => spec,
         None => return spec_not_found(&request.environment_name),
     };
@@ -259,7 +277,7 @@ async fn status_handler(
     State(state): State<OrchestratorState>,
     Json(request): Json<EnvStatusRequest>,
 ) -> Response {
-    let spec = match lookup_spec(&state, &request.environment_name, None) {
+    let spec = match lookup_spec(&state, &request.environment_name, None).await {
         Some(spec) => spec,
         None => return spec_not_found(&request.environment_name),
     };
@@ -281,7 +299,7 @@ async fn exec_handler(
     State(state): State<OrchestratorState>,
     Json(request): Json<EnvExecRequest>,
 ) -> Response {
-    let spec = match lookup_spec(&state, &request.environment_name, None) {
+    let spec = match lookup_spec(&state, &request.environment_name, None).await {
         Some(spec) => spec,
         None => return spec_not_found(&request.environment_name),
     };
@@ -312,7 +330,7 @@ async fn logs_handler(
     State(state): State<OrchestratorState>,
     Json(request): Json<EnvLogsRequest>,
 ) -> Response {
-    let spec = match lookup_spec(&state, &request.environment_name, None) {
+    let spec = match lookup_spec(&state, &request.environment_name, None).await {
         Some(spec) => spec,
         None => return spec_not_found(&request.environment_name),
     };
@@ -553,7 +571,7 @@ mod tests {
     async fn launch_conflicts_when_gate_busy() {
         let state =
             OrchestratorState::with_gate(Arc::new(MockDriver::default()), Arc::new(BusyGate));
-        state.register_spec("dev", dev_spec());
+        state.register_spec("dev", dev_spec()).await.unwrap();
         let app = create_router(state);
         let request = EnvLaunchRequest {
             session_id: SessionId::new(),
@@ -578,7 +596,7 @@ mod tests {
     async fn launch_releases_gate_after_success() {
         let gate = Arc::new(RecordingGate::default());
         let state = OrchestratorState::with_gate(Arc::new(MockDriver::default()), gate.clone());
-        state.register_spec("dev", dev_spec());
+        state.register_spec("dev", dev_spec()).await.unwrap();
         let app = create_router(state);
         let request = EnvLaunchRequest {
             session_id: SessionId::new(),
@@ -606,7 +624,7 @@ mod tests {
     #[tokio::test]
     async fn status_returns_environment_state() {
         let state = OrchestratorState::new(Arc::new(MockDriver::default()));
-        state.register_spec("dev", dev_spec());
+        state.register_spec("dev", dev_spec()).await.unwrap();
         let app = create_router(state);
         let request = EnvStatusRequest {
             session_id: SessionId::new(),
@@ -631,7 +649,7 @@ mod tests {
     #[tokio::test]
     async fn exec_returns_command_result() {
         let state = OrchestratorState::new(Arc::new(MockDriver::default()));
-        state.register_spec("dev", dev_spec());
+        state.register_spec("dev", dev_spec()).await.unwrap();
         let app = create_router(state);
         let request = EnvExecRequest {
             session_id: SessionId::new(),
@@ -658,7 +676,7 @@ mod tests {
     #[tokio::test]
     async fn relaunch_restarts_environment() {
         let state = OrchestratorState::new(Arc::new(MockDriver::default()));
-        state.register_spec("dev", dev_spec());
+        state.register_spec("dev", dev_spec()).await.unwrap();
         let app = create_router(state);
         let request = EnvRelaunchRequest {
             session_id: SessionId::new(),
@@ -699,12 +717,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ready_returns_ok_with_available_store() {
+        let state = OrchestratorState::new(Arc::new(MockDriver::default()));
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response).await;
+        assert!(body.contains("\"status\":\"ready\""));
+    }
+
+    #[tokio::test]
     async fn list_specs_returns_registered_names_sorted() {
         let state = OrchestratorState::new(Arc::new(MockDriver::default()));
         let mut zebra = dev_spec();
         zebra.name = "zebra".to_string();
-        state.register_spec("zebra", zebra);
-        state.register_spec("dev", dev_spec());
+        state.register_spec("zebra", zebra).await.unwrap();
+        state.register_spec("dev", dev_spec()).await.unwrap();
         let app = create_router(state);
         let response = app
             .oneshot(
@@ -738,6 +775,33 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_string(response).await;
         assert!(body.contains("\"specs\":[]"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn spec_store_is_shared_across_replicas() {
+        let store: Arc<dyn SpecStore> = Arc::new(InMemorySpecStore::new());
+        let state_a = OrchestratorState::new(Arc::new(MockDriver::default())).with_spec_store(store.clone());
+        let state_b = OrchestratorState::new(Arc::new(MockDriver::default())).with_spec_store(store);
+        state_a.register_spec("dev", dev_spec()).await.unwrap();
+
+        let app = create_router(state_b);
+        let request = EnvLaunchRequest {
+            session_id: SessionId::new(),
+            environment_name: "dev".to_string(),
+            variant: None,
+        };
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/env/launch")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]
