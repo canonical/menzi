@@ -2,15 +2,36 @@ use async_trait::async_trait;
 use menzi_common::{MenziError, Result};
 use std::time::Duration;
 
+use crate::credentials::OpencodeAuth;
 use crate::types::{AgentSession, PromptOutcome};
 
 #[async_trait]
 pub trait OpencodeGateway: Send + Sync {
-    async fn health(&self, endpoint: &str) -> Result<()>;
-    async fn create_session(&self, endpoint: &str, title: Option<&str>) -> Result<AgentSession>;
-    async fn prompt(&self, endpoint: &str, session_id: &str, text: &str) -> Result<PromptOutcome>;
-    async fn interrupt(&self, endpoint: &str, session_id: &str) -> Result<()>;
-    async fn sessions(&self, endpoint: &str) -> Result<Vec<AgentSession>>;
+    async fn health(&self, endpoint: &str, auth: Option<&OpencodeAuth>) -> Result<()>;
+    async fn create_session(
+        &self,
+        endpoint: &str,
+        title: Option<&str>,
+        auth: Option<&OpencodeAuth>,
+    ) -> Result<AgentSession>;
+    async fn prompt(
+        &self,
+        endpoint: &str,
+        session_id: &str,
+        text: &str,
+        auth: Option<&OpencodeAuth>,
+    ) -> Result<PromptOutcome>;
+    async fn interrupt(
+        &self,
+        endpoint: &str,
+        session_id: &str,
+        auth: Option<&OpencodeAuth>,
+    ) -> Result<()>;
+    async fn sessions(
+        &self,
+        endpoint: &str,
+        auth: Option<&OpencodeAuth>,
+    ) -> Result<Vec<AgentSession>>;
 }
 
 pub struct HttpOpencodeGateway {
@@ -56,6 +77,16 @@ impl HttpOpencodeGateway {
         serde_json::from_str(&body)
             .map_err(|error| MenziError::Gateway(format!("invalid opencode response: {error}")))
     }
+
+    fn with_auth(
+        request: reqwest::RequestBuilder,
+        auth: Option<&OpencodeAuth>,
+    ) -> reqwest::RequestBuilder {
+        match auth {
+            Some(auth) => request.basic_auth(auth.username.clone(), Some(auth.password.clone())),
+            None => request,
+        }
+    }
 }
 
 impl Default for HttpOpencodeGateway {
@@ -66,10 +97,17 @@ impl Default for HttpOpencodeGateway {
 
 fn message_id(value: &serde_json::Value) -> Option<String> {
     value
+        .get("data")
+        .and_then(|data| data.get("id"))
+        .and_then(|id| id.as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            value
         .get("info")
         .and_then(|info| info.get("id"))
         .and_then(|id| id.as_str())
         .map(str::to_string)
+        })
 }
 
 fn finish_reason(value: &serde_json::Value) -> Option<String> {
@@ -98,6 +136,9 @@ fn message_error(value: &serde_json::Value) -> Option<String> {
 }
 
 fn session_from(value: &serde_json::Value) -> Option<AgentSession> {
+    if let Some(data) = value.get("data") {
+        return session_from(data);
+    }
     let id = value.get("id").and_then(|id| id.as_str())?;
     Some(AgentSession {
         id: id.to_string(),
@@ -114,37 +155,52 @@ fn session_from(value: &serde_json::Value) -> Option<AgentSession> {
 
 #[async_trait]
 impl OpencodeGateway for HttpOpencodeGateway {
-    async fn health(&self, endpoint: &str) -> Result<()> {
-        self.send_json(self.http.get(Self::url(endpoint, "/api/model")))
-            .await?;
+    async fn health(&self, endpoint: &str, auth: Option<&OpencodeAuth>) -> Result<()> {
+        self.send_json(Self::with_auth(
+            self.http.get(Self::url(endpoint, "/api/model")),
+            auth,
+        ))
+        .await?;
         Ok(())
     }
 
-    async fn create_session(&self, endpoint: &str, title: Option<&str>) -> Result<AgentSession> {
+    async fn create_session(
+        &self,
+        endpoint: &str,
+        title: Option<&str>,
+        auth: Option<&OpencodeAuth>,
+    ) -> Result<AgentSession> {
         let mut body = serde_json::json!({});
         if let Some(title) = title {
             body["title"] = serde_json::Value::String(title.to_string());
         }
         let value = self
-            .send_json(self.http.post(Self::url(endpoint, "/session")).json(&body))
+            .send_json(Self::with_auth(
+                self.http.post(Self::url(endpoint, "/api/session")).json(&body),
+                auth,
+            ))
             .await?;
         session_from(&value)
             .ok_or_else(|| MenziError::Gateway("opencode session has no id".to_string()))
     }
 
-    async fn prompt(&self, endpoint: &str, session_id: &str, text: &str) -> Result<PromptOutcome> {
-        let body = serde_json::json!({
-            "parts": [{ "type": "text", "text": text }]
-        });
+    async fn prompt(
+        &self,
+        endpoint: &str,
+        session_id: &str,
+        text: &str,
+        auth: Option<&OpencodeAuth>,
+    ) -> Result<PromptOutcome> {
         let value = self
-            .send_json(
+            .send_json(Self::with_auth(
                 self.http
                     .post(Self::url(
                         endpoint,
-                        &format!("/session/{session_id}/message"),
+                        &format!("/api/session/{session_id}/prompt"),
                     ))
-                    .json(&body),
-            )
+                    .json(&serde_json::json!({ "text": text })),
+                auth,
+            ))
             .await?;
         Ok(PromptOutcome {
             session_id: session_id.to_string(),
@@ -154,19 +210,35 @@ impl OpencodeGateway for HttpOpencodeGateway {
         })
     }
 
-    async fn interrupt(&self, endpoint: &str, session_id: &str) -> Result<()> {
-        self.send_json(
+    async fn interrupt(
+        &self,
+        endpoint: &str,
+        session_id: &str,
+        auth: Option<&OpencodeAuth>,
+    ) -> Result<()> {
+        self.send_json(Self::with_auth(
             self.http
-                .post(Self::url(endpoint, &format!("/session/{session_id}/abort")))
+                .post(Self::url(
+                    endpoint,
+                    &format!("/api/session/{session_id}/interrupt"),
+                ))
                 .json(&serde_json::json!({})),
-        )
+            auth,
+        ))
         .await?;
         Ok(())
     }
 
-    async fn sessions(&self, endpoint: &str) -> Result<Vec<AgentSession>> {
+    async fn sessions(
+        &self,
+        endpoint: &str,
+        auth: Option<&OpencodeAuth>,
+    ) -> Result<Vec<AgentSession>> {
         let value = self
-            .send_json(self.http.get(Self::url(endpoint, "/session")))
+            .send_json(Self::with_auth(
+                self.http.get(Self::url(endpoint, "/api/session")),
+                auth,
+            ))
             .await?;
         let list = value
             .as_array()
@@ -177,7 +249,12 @@ impl OpencodeGateway for HttpOpencodeGateway {
             })?;
         Ok(list
             .iter()
-            .filter(|session| session.get("parentID").and_then(|value| value.as_str()).is_none())
+            .filter(|session| {
+                session
+                    .get("parentID")
+                    .and_then(|value| value.as_str())
+                    .is_none()
+            })
             .filter_map(session_from)
             .collect())
     }

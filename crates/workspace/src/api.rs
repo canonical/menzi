@@ -247,6 +247,14 @@ pub struct SessionWorkspace {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_name: Option<String>,
     pub kind: SessionKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<SessionWorkspaceAuth>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionWorkspaceAuth {
+    pub username: String,
+    pub password: String,
 }
 
 async fn session_workspace(
@@ -279,6 +287,7 @@ async fn session_workspace(
                 endpoint: binding.endpoint,
                 instance_name: binding.instance_name,
                 kind: binding.kind,
+                auth: None,
             })
             .into_response()
         }
@@ -295,6 +304,7 @@ async fn session_route(
     Caller(caller): Caller,
     Path(session_id): Path<String>,
 ) -> Response {
+    let service_request = caller.user_id().is_none();
     let binding = match state.manager.session_binding(&session_id).await {
         Ok(Some(binding)) => binding,
         Ok(None) => return server_error(MenziError::NotFound(format!("session {session_id}"))),
@@ -309,12 +319,34 @@ async fn session_route(
     } else if let Err(error) = require_service(&caller) {
         return server_error(error);
     }
+    let mut auth = None;
+    if service_request {
+        match state
+            .manager
+            .get_workspace_by_id(binding.workspace_id)
+            .await
+        {
+            Ok(workspace) => {
+                if let (Some(username), Some(password_encrypted)) = (
+                    workspace.opencode_username,
+                    workspace.opencode_password_encrypted,
+                ) {
+                    let manager = crate::credentials::WorkspaceCredentialManager::from_env();
+                    if let Ok(password) = manager.decrypt(&password_encrypted) {
+                        auth = Some(SessionWorkspaceAuth { username, password });
+                    }
+                }
+            }
+            Err(error) => return server_error(error),
+        }
+    }
     Json(SessionWorkspace {
         opencode_session: binding.opencode_session,
         workspace_id: binding.workspace_id,
         endpoint: binding.endpoint,
         instance_name: binding.instance_name,
         kind: binding.kind,
+        auth,
     })
     .into_response()
 }
@@ -661,13 +693,23 @@ mod tests {
         let app = open_app(project);
         let health = app
             .clone()
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(health.status(), StatusCode::OK);
 
         let ready = app
-            .oneshot(Request::builder().uri("/ready").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(ready.status(), StatusCode::OK);
@@ -924,7 +966,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = json_of(response).await;
         assert!(body.get("head").is_some(), "the commit it compares against");
-        assert!(body.get("version").is_some(), "the exact git state snapshot");
+        assert!(
+            body.get("version").is_some(),
+            "the exact git state snapshot"
+        );
         assert!(body.get("changes").unwrap().is_array());
     }
 
@@ -955,9 +1000,7 @@ mod tests {
             &app,
             user,
             "GET",
-            &format!(
-                "/api/v1/workspaces/{user}/{project}/diff?path=src%2Fa.rs&version={version}"
-            ),
+            &format!("/api/v1/workspaces/{user}/{project}/diff?path=src%2Fa.rs&version={version}"),
             None,
         )
         .await;
@@ -1058,16 +1101,18 @@ mod tests {
             &app,
             user,
             "GET",
-            &format!(
-                "/api/v1/workspaces/{user}/{project}/terminal/output?after={last_seq}"
-            ),
+            &format!("/api/v1/workspaces/{user}/{project}/terminal/output?after={last_seq}"),
             None,
         )
         .await;
         assert_eq!(newer.status(), StatusCode::OK);
         let newer_body = json_of(newer).await;
         assert_eq!(
-            newer_body["chunks"].as_array().cloned().unwrap_or_default().len(),
+            newer_body["chunks"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .len(),
             0
         );
     }
@@ -1271,6 +1316,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = json_of(response).await;
         assert_eq!(body["endpoint"], "http://10.0.0.9:17999");
+        assert_eq!(body["auth"]["username"], "opencode");
+        assert!(body["auth"]["password"].as_str().is_some());
     }
 
     #[tokio::test]

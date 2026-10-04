@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
+use crate::credentials::{OpencodeAuth, WorkspaceCredentialManager};
 use crate::driver::{ProvisionOutcome, WorkspaceDriver};
 use crate::gateway::OpencodeGateway;
 use crate::registry::{SessionBinding, SessionKind, SessionRegistry};
@@ -64,6 +65,7 @@ pub struct WorkspaceManager {
     terminals: Arc<RwLock<HashMap<WorkspaceKey, WorkspaceTerminal>>>,
     health_attempts: u32,
     health_delay: std::time::Duration,
+    credentials: WorkspaceCredentialManager,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +99,7 @@ impl WorkspaceManager {
             terminals: Arc::new(RwLock::new(HashMap::new())),
             health_attempts: 15,
             health_delay: std::time::Duration::from_secs(2),
+            credentials: WorkspaceCredentialManager::from_env(),
         }
     }
 
@@ -120,11 +123,39 @@ impl WorkspaceManager {
         &self.source_instance
     }
 
-    async fn wait_healthy(&self, endpoint: &str) -> Result<()> {
+    fn opencode_auth_for(&self, workspace: &Workspace) -> Result<Option<OpencodeAuth>> {
+        let Some(password_encrypted) = workspace.opencode_password_encrypted.as_deref() else {
+            return Ok(None);
+        };
+        let username = workspace
+            .opencode_username
+            .clone()
+            .unwrap_or_else(|| "opencode".to_string());
+        let password = self.credentials.decrypt(password_encrypted)?;
+        Ok(Some(OpencodeAuth { username, password }))
+    }
+
+    async fn ensure_auth_configured(
+        &self,
+        workspace: &mut Workspace,
+        instance: &str,
+    ) -> Result<OpencodeAuth> {
+        if let Some(auth) = self.opencode_auth_for(workspace)? {
+            return Ok(auth);
+        }
+        let username = "opencode".to_string();
+        let password = self.credentials.generate_password();
         let mut last = None;
         for attempt in 0..self.health_attempts {
-            match self.gateway.health(endpoint).await {
-                Ok(()) => return Ok(()),
+            match self
+                .driver
+                .configure_opencode_auth(instance, &username, &password)
+                .await
+            {
+                Ok(()) => {
+                    last = None;
+                    break;
+                }
                 Err(error) => {
                     last = Some(error);
                     if attempt + 1 < self.health_attempts {
@@ -133,7 +164,14 @@ impl WorkspaceManager {
                 }
             }
         }
-        Err(last.unwrap_or_else(|| MenziError::Gateway("opencode unreachable".to_string())))
+        if let Some(error) = last {
+            return Err(error);
+        }
+        workspace.opencode_username = Some(username.clone());
+        workspace.opencode_password_encrypted = Some(self.credentials.encrypt(&password)?);
+        workspace.updated_at = now();
+        self.store.save(workspace).await?;
+        Ok(OpencodeAuth { username, password })
     }
 
     pub async fn ensure_workspace(
@@ -174,6 +212,8 @@ impl WorkspaceManager {
             last_error: None,
             created_at: now(),
             updated_at: now(),
+            opencode_username: None,
+            opencode_password_encrypted: None,
         };
         self.store.save(&workspace).await?;
         self.audit
@@ -204,6 +244,31 @@ impl WorkspaceManager {
                 workspace.last_error = Some(error.to_string());
                 workspace.updated_at = now();
                 self.store.save(&workspace).await?;
+                return Err(error);
+            }
+        }
+
+        let auth = match self.ensure_auth_configured(&mut workspace, &instance).await {
+            Ok(auth) => auth,
+            Err(error) => {
+                workspace.status = WorkspaceStatus::Requested;
+                workspace.last_error = Some(error.to_string());
+                workspace.updated_at = now();
+                self.store.save(&workspace).await?;
+                self.audit
+                    .record("provision:failed", principal, key, &error.to_string());
+                return Err(error);
+            }
+        };
+
+        if let Some(endpoint) = workspace.endpoint.as_deref() {
+            if let Err(error) = self.gateway.health(endpoint, Some(&auth)).await {
+                workspace.status = WorkspaceStatus::Requested;
+                workspace.last_error = Some(error.to_string());
+                workspace.updated_at = now();
+                self.store.save(&workspace).await?;
+                self.audit
+                    .record("provision:failed", principal, key, &error.to_string());
                 return Err(error);
             }
         }
@@ -249,7 +314,7 @@ impl WorkspaceManager {
     }
 
     pub async fn connect(&self, key: &WorkspaceKey) -> Result<String> {
-        let workspace = self.get_workspace(key).await?;
+        let mut workspace = self.get_workspace(key).await?;
         if !workspace.status.accepts_work() {
             return Err(MenziError::Conflict(format!(
                 "workspace {} is {}",
@@ -259,6 +324,7 @@ impl WorkspaceManager {
         }
         let instance = workspace
             .instance_name
+            .clone()
             .ok_or_else(|| MenziError::Conflict("workspace has no instance".to_string()))?;
         if !self.driver.is_running(&instance).await? {
             self.start(key).await?;
@@ -267,8 +333,22 @@ impl WorkspaceManager {
             Some(endpoint) => endpoint,
             None => self.driver.endpoint_template(&instance),
         };
-        self.wait_healthy(&endpoint).await?;
-        Ok(endpoint)
+        let auth = self
+            .ensure_auth_configured(&mut workspace, &instance)
+            .await?;
+        let mut last = None;
+        for attempt in 0..self.health_attempts {
+            match self.gateway.health(&endpoint, Some(&auth)).await {
+                Ok(()) => return Ok(endpoint),
+                Err(error) => {
+                    last = Some(error);
+                    if attempt + 1 < self.health_attempts {
+                        tokio::time::sleep(self.health_delay).await;
+                    }
+                }
+            }
+        }
+        return Err(last.unwrap_or_else(|| MenziError::Gateway("opencode unreachable".to_string())));
     }
 
     pub async fn start(&self, key: &WorkspaceKey) -> Result<Workspace> {
@@ -313,7 +393,11 @@ impl WorkspaceManager {
         title: Option<&str>,
     ) -> Result<AgentSession> {
         let endpoint = self.connect(key).await?;
-        self.gateway.create_session(&endpoint, title).await
+        let workspace = self.get_workspace(key).await?;
+        let auth = self.opencode_auth_for(&workspace)?;
+        self.gateway
+            .create_session(&endpoint, title, auth.as_ref())
+            .await
     }
 
     /// Where a session runs, so the proxy can send its traffic to the right
@@ -359,7 +443,9 @@ impl WorkspaceManager {
 
     pub async fn list_sessions(&self, key: &WorkspaceKey) -> Result<Vec<AgentSession>> {
         let endpoint = self.connect(key).await?;
-        self.gateway.sessions(&endpoint).await
+        let workspace = self.get_workspace(key).await?;
+        let auth = self.opencode_auth_for(&workspace)?;
+        self.gateway.sessions(&endpoint, auth.as_ref()).await
     }
 
     pub async fn prompt(
@@ -390,7 +476,11 @@ impl WorkspaceManager {
         }
         let endpoint = self.connect(key).await?;
         let mut workspace = self.get_workspace(key).await?;
-        let outcome = self.gateway.prompt(&endpoint, session_id, text).await?;
+        let auth = self.opencode_auth_for(&workspace)?;
+        let outcome = self
+            .gateway
+            .prompt(&endpoint, session_id, text, auth.as_ref())
+            .await?;
         if workspace.status == WorkspaceStatus::Ready || workspace.status == WorkspaceStatus::Idle {
             workspace.status = WorkspaceStatus::Running;
             workspace.updated_at = now();
@@ -402,7 +492,11 @@ impl WorkspaceManager {
 
     pub async fn interrupt(&self, key: &WorkspaceKey, session_id: &str) -> Result<()> {
         let endpoint = self.connect(key).await?;
-        self.gateway.interrupt(&endpoint, session_id).await
+        let workspace = self.get_workspace(key).await?;
+        let auth = self.opencode_auth_for(&workspace)?;
+        self.gateway
+            .interrupt(&endpoint, session_id, auth.as_ref())
+            .await
     }
 
     pub async fn terminal(
@@ -621,7 +715,12 @@ impl WorkspaceManager {
         Ok(built)
     }
 
-    async fn build_snapshot(&self, instance: &str, repo: &str, state: GitState) -> Result<DiffSnapshot> {
+    async fn build_snapshot(
+        &self,
+        instance: &str,
+        repo: &str,
+        state: GitState,
+    ) -> Result<DiffSnapshot> {
         let counts = numstat_by_file(
             &self
                 .git(
@@ -1304,6 +1403,19 @@ pub(crate) mod testbed {
             Ok(ProvisionOutcome::Created)
         }
 
+        async fn configure_opencode_auth(
+            &self,
+            instance: &str,
+            username: &str,
+            _password: &str,
+        ) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("auth:{instance}:{username}"));
+            Ok(())
+        }
+
         async fn start(&self, instance: &str) -> Result<()> {
             self.calls.lock().unwrap().push(format!("start:{instance}"));
             *self.running.lock().unwrap() = true;
@@ -1380,11 +1492,11 @@ pub(crate) mod testbed {
 
     #[async_trait]
     impl OpencodeGateway for RecordingGateway {
-        async fn health(&self, endpoint: &str) -> Result<()> {
+        async fn health(&self, endpoint: &str, auth: Option<&OpencodeAuth>) -> Result<()> {
             self.calls
                 .lock()
                 .unwrap()
-                .push(format!("health:{endpoint}"));
+                .push(format!("health:{endpoint}:{}", auth.is_some()));
             if *self.healthy.lock().unwrap() {
                 Ok(())
             } else {
@@ -1396,11 +1508,12 @@ pub(crate) mod testbed {
             &self,
             endpoint: &str,
             title: Option<&str>,
+            auth: Option<&OpencodeAuth>,
         ) -> Result<AgentSession> {
             self.calls
                 .lock()
                 .unwrap()
-                .push(format!("session:{endpoint}:{title:?}"));
+                .push(format!("session:{endpoint}:{title:?}:{}", auth.is_some()));
             Ok(AgentSession {
                 id: "ses_1".to_string(),
                 title: title.map(str::to_string),
@@ -1413,11 +1526,12 @@ pub(crate) mod testbed {
             endpoint: &str,
             session_id: &str,
             text: &str,
+            auth: Option<&OpencodeAuth>,
         ) -> Result<PromptOutcome> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("prompt:{endpoint}:{session_id}:{text}"));
+            self.calls.lock().unwrap().push(format!(
+                "prompt:{endpoint}:{session_id}:{text}:{}",
+                auth.is_some()
+            ));
             Ok(PromptOutcome {
                 session_id: session_id.to_string(),
                 message_id: Some("msg_1".to_string()),
@@ -1426,19 +1540,28 @@ pub(crate) mod testbed {
             })
         }
 
-        async fn interrupt(&self, endpoint: &str, session_id: &str) -> Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("interrupt:{endpoint}:{session_id}"));
+        async fn interrupt(
+            &self,
+            endpoint: &str,
+            session_id: &str,
+            auth: Option<&OpencodeAuth>,
+        ) -> Result<()> {
+            self.calls.lock().unwrap().push(format!(
+                "interrupt:{endpoint}:{session_id}:{}",
+                auth.is_some()
+            ));
             Ok(())
         }
 
-        async fn sessions(&self, endpoint: &str) -> Result<Vec<AgentSession>> {
+        async fn sessions(
+            &self,
+            endpoint: &str,
+            auth: Option<&OpencodeAuth>,
+        ) -> Result<Vec<AgentSession>> {
             self.calls
                 .lock()
                 .unwrap()
-                .push(format!("sessions:{endpoint}"));
+                .push(format!("sessions:{endpoint}:{}", auth.is_some()));
             Ok(vec![AgentSession {
                 id: "ses_1".to_string(),
                 title: None,
@@ -1527,12 +1650,20 @@ mod tests {
             Some(k.instance_name().as_str())
         );
         assert_eq!(workspace.endpoint.as_deref(), Some("http://10.0.0.9:17999"));
+        assert_eq!(workspace.opencode_username.as_deref(), Some("opencode"));
+        assert!(workspace.opencode_password_encrypted.is_some());
         assert!(h
             .driver
             .calls
             .lock()
             .unwrap()
             .contains(&format!("provision:mz-workspace:{}", k.instance_name())));
+        assert!(h
+            .driver
+            .calls
+            .lock()
+            .unwrap()
+            .contains(&format!("auth:{}:opencode", k.instance_name())));
     }
 
     #[tokio::test]
@@ -1551,7 +1682,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first.id, second.id);
-        assert_eq!(h.driver.calls.lock().unwrap().len(), 1);
+        assert_eq!(
+            h.driver
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|call| call.starts_with("provision:"))
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -1587,7 +1727,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first.id, second.id);
-        assert_eq!(h.driver.calls.lock().unwrap().len(), 1);
+        assert_eq!(
+            h.driver
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|call| call.starts_with("provision:"))
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -1839,7 +1988,9 @@ mod tests {
         assert_eq!(outcome.session_id, "ses_1");
         let calls = h.gateway.calls.lock().unwrap();
         assert!(calls.iter().any(|call| call.contains("session:")));
-        assert!(calls.iter().any(|call| call.ends_with(":do the thing")));
+        assert!(calls
+            .iter()
+            .any(|call| call.contains("prompt:") && call.contains(":do the thing:")));
     }
 
     #[tokio::test]
@@ -1931,12 +2082,13 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(output
-            .chunks
-            .iter()
-            .any(|chunk| chunk.text.contains("ok")));
+        assert!(output.chunks.iter().any(|chunk| chunk.text.contains("ok")));
 
-        let only_new = h.manager.terminal_output(&k, output.last_seq).await.unwrap();
+        let only_new = h
+            .manager
+            .terminal_output(&k, output.last_seq)
+            .await
+            .unwrap();
         assert_eq!(only_new.chunks.len(), 0);
     }
 
@@ -2080,7 +2232,10 @@ mod tests {
 
         assert_eq!(first.version, second.version);
         let calls = h.driver.calls.lock().unwrap();
-        let numstat_calls = calls.iter().filter(|call| call.contains("diff --numstat HEAD")).count();
+        let numstat_calls = calls
+            .iter()
+            .filter(|call| call.contains("diff --numstat HEAD"))
+            .count();
         assert!(numstat_calls <= 1);
     }
 
@@ -2107,7 +2262,12 @@ mod tests {
 
         let stale = h
             .manager
-            .tree_changes(&k, Some("/workspace"), Some("src/a.rs"), Some(&first.version))
+            .tree_changes(
+                &k,
+                Some("/workspace"),
+                Some("src/a.rs"),
+                Some(&first.version),
+            )
             .await;
         assert!(matches!(stale, Err(MenziError::Conflict(_))));
     }
@@ -2615,6 +2775,8 @@ mod tests {
             last_error: Some("interrupted".to_string()),
             created_at: now(),
             updated_at: now(),
+            opencode_username: None,
+            opencode_password_encrypted: None,
         };
         h.store.save(&workspace).await.unwrap();
         *h.driver.running.lock().unwrap() = true;
@@ -2645,6 +2807,8 @@ mod tests {
                 last_error: None,
                 created_at: now(),
                 updated_at: now(),
+                opencode_username: None,
+                opencode_password_encrypted: None,
             })
             .await
             .unwrap();
@@ -2677,6 +2841,8 @@ mod tests {
                 last_error: None,
                 created_at: now(),
                 updated_at: now(),
+                opencode_username: None,
+                opencode_password_encrypted: None,
             })
             .await
             .unwrap();
@@ -2709,6 +2875,8 @@ mod tests {
             last_error: None,
             created_at: "2020-01-01T00:00:00Z".to_string(),
             updated_at: "2020-01-01T00:00:00Z".to_string(),
+            opencode_username: None,
+            opencode_password_encrypted: None,
         };
         h.store.save(&workspace).await.unwrap();
         *h.driver.running.lock().unwrap() = true;

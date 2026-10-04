@@ -9,6 +9,12 @@ use crate::types::{TerminalRequest, TerminalResult};
 #[async_trait]
 pub trait WorkspaceDriver: Send + Sync {
     async fn provision(&self, instance: &str, source_instance: &str) -> Result<ProvisionOutcome>;
+    async fn configure_opencode_auth(
+        &self,
+        instance: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<()>;
     async fn start(&self, instance: &str) -> Result<()>;
     async fn stop(&self, instance: &str, force: bool) -> Result<()>;
     async fn destroy(&self, instance: &str) -> Result<()>;
@@ -116,6 +122,36 @@ impl WorkspaceDriver for LxdWorkspaceDriver {
         Ok(ProvisionOutcome::Created)
     }
 
+    async fn configure_opencode_auth(
+        &self,
+        instance: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<()> {
+        let script = format!(
+            "mkdir -p /etc/systemd/system/opencode.service.d && cat > /etc/systemd/system/opencode.service.d/10-auth.conf <<'EOF'\n[Service]\nEnvironment=OPENCODE_SERVER_USERNAME={}\nEnvironment=OPENCODE_SERVER_PASSWORD={}\nEOF\nsystemctl daemon-reload\nsystemctl restart opencode.service",
+            sh_quote(username),
+            sh_quote(password),
+        );
+        let result = self
+            .client
+            .exec_in(
+                instance,
+                &["bash".to_string(), "-lc".to_string(), script],
+                Some("/"),
+            )
+            .await?;
+        if result.exit_code != 0 {
+            let stdout = result.stdout.trim();
+            let stderr = result.stderr.trim();
+            return Err(menzi_common::MenziError::Lxd(format!(
+                "failed to configure opencode auth (exit {}): stdout='{}' stderr='{}'",
+                result.exit_code, stdout, stderr
+            )));
+        }
+        Ok(())
+    }
+
     async fn start(&self, instance: &str) -> Result<()> {
         self.start_and_wait(instance).await
     }
@@ -210,6 +246,14 @@ impl WorkspaceDriver for LxdWorkspaceDriver {
             port = self.opencode_port
         )
     }
+}
+
+fn sh_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    let escaped = value.replace('\'', "'\"'\"'");
+    format!("'{escaped}'")
 }
 
 #[cfg(test)]
