@@ -36,6 +36,8 @@ impl PreviewApiState {
 
 pub fn create_router(state: PreviewApiState) -> Router {
     Router::new()
+        .route("/health", get(health_check))
+        .route("/ready", get(ready_check))
         .route("/api/v1/projects/{project_id}/previews", get(list_previews))
         .route("/api/v1/previews", post(create_preview))
         .route(
@@ -45,6 +47,14 @@ pub fn create_router(state: PreviewApiState) -> Router {
         .route("/api/v1/previews/{id}/reset", post(reset_preview))
         .route("/api/v1/previews/{id}/restart", post(restart_preview))
         .with_state(state)
+}
+
+async fn health_check() -> Response {
+    (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
+}
+
+async fn ready_check() -> Response {
+    (StatusCode::OK, Json(json!({"status": "ready"}))).into_response()
 }
 
 fn not_found(id: &str) -> Response {
@@ -58,8 +68,15 @@ fn not_found(id: &str) -> Response {
 async fn list_previews(
     State(state): State<PreviewApiState>,
     Path(project_id): Path<ProjectId>,
-) -> Json<Vec<Preview>> {
-    Json(state.manager.list(project_id))
+) -> Response {
+    match state.manager.list(project_id).await {
+        Ok(previews) => Json(previews).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 async fn create_preview(
@@ -84,9 +101,14 @@ async fn create_preview(
 }
 
 async fn get_preview(State(state): State<PreviewApiState>, Path(id): Path<String>) -> Response {
-    match state.manager.get(&id) {
-        Some(preview) => Json(preview).into_response(),
-        None => not_found(&id),
+    match state.manager.get(&id).await {
+        Ok(Some(preview)) => Json(preview).into_response(),
+        Ok(None) => not_found(&id),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -118,13 +140,17 @@ async fn teardown_preview(
 mod tests {
     use super::*;
     use crate::manager::testbed::RecordingPreviewDriver;
+    use crate::InMemoryPreviewStore;
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
 
     fn state() -> (PreviewApiState, Arc<RecordingPreviewDriver>) {
         let driver = Arc::new(RecordingPreviewDriver::default());
-        let manager = Arc::new(PreviewManager::new(driver.clone()));
+        let manager = Arc::new(PreviewManager::new(
+            driver.clone(),
+            Arc::new(InMemoryPreviewStore::new()),
+        ));
         (PreviewApiState::new(manager, "mz-workspace"), driver)
     }
 
@@ -165,6 +191,34 @@ mod tests {
         let calls = driver.calls.lock().unwrap();
         assert!(calls[0].starts_with("copy:mz-workspace:prv-"));
         assert!(calls[1].starts_with("start:prv-"));
+    }
+
+    #[tokio::test]
+    async fn health_and_ready_routes_return_ok() {
+        let (state, _driver) = state();
+        let app = create_router(state);
+        let health = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
+
+        let ready = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ready.status(), StatusCode::OK);
     }
 
     #[tokio::test]

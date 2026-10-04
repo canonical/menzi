@@ -2,10 +2,10 @@ use async_trait::async_trait;
 use chrono::Utc;
 use menzi_common::ids::ProjectId;
 use menzi_common::{MenziError, Result};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+use crate::store::PreviewStore;
 use crate::types::{Preview, PreviewSpec, PreviewStatus};
 
 #[async_trait]
@@ -47,14 +47,14 @@ impl PreviewDriver for LxdPreviewDriver {
 
 pub struct PreviewManager {
     driver: Arc<dyn PreviewDriver>,
-    registry: Mutex<HashMap<String, Preview>>,
+    store: Arc<dyn PreviewStore>,
 }
 
 impl PreviewManager {
-    pub fn new(driver: Arc<dyn PreviewDriver>) -> Self {
+    pub fn new(driver: Arc<dyn PreviewDriver>, store: Arc<dyn PreviewStore>) -> Self {
         Self {
             driver,
-            registry: Mutex::new(HashMap::new()),
+            store,
         }
     }
 
@@ -76,35 +76,22 @@ impl PreviewManager {
             url: format!("http://{instance}.preview.dev.local"),
             created_at: Utc::now().to_rfc3339(),
         };
-        self.registry
-            .lock()
-            .expect("registry lock")
-            .insert(preview.id.clone(), preview.clone());
+        self.store.save(&preview, &spec.source_instance).await?;
         Ok(preview)
     }
 
-    pub fn list(&self, project_id: ProjectId) -> Vec<Preview> {
-        let registry = self.registry.lock().expect("registry lock");
-        let mut previews: Vec<Preview> = registry
-            .values()
-            .filter(|preview| preview.project_id == project_id)
-            .cloned()
-            .collect();
-        previews.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        previews
+    pub async fn list(&self, project_id: ProjectId) -> Result<Vec<Preview>> {
+        self.store.list(project_id).await
     }
 
-    pub fn get(&self, id: &str) -> Option<Preview> {
-        self.registry
-            .lock()
-            .expect("registry lock")
-            .get(id)
-            .cloned()
+    pub async fn get(&self, id: &str) -> Result<Option<Preview>> {
+        self.store.get(id).await
     }
 
     pub async fn reset(&self, id: &str) -> Result<Preview> {
         let preview = self
             .get(id)
+            .await?
             .ok_or_else(|| MenziError::NotFound(format!("preview {id}")))?;
         let instance = self.instance_for(&preview);
         self.driver.stop_instance(&instance, true).await?;
@@ -115,6 +102,7 @@ impl PreviewManager {
     pub async fn restart(&self, id: &str) -> Result<Preview> {
         let preview = self
             .get(id)
+            .await?
             .ok_or_else(|| MenziError::NotFound(format!("preview {id}")))?;
         let instance = self.instance_for(&preview);
         self.driver.stop_instance(&instance, false).await?;
@@ -125,11 +113,12 @@ impl PreviewManager {
     pub async fn teardown(&self, id: &str) -> Result<()> {
         let preview = self
             .get(id)
+            .await?
             .ok_or_else(|| MenziError::NotFound(format!("preview {id}")))?;
         let instance = self.instance_for(&preview);
         let _ = self.driver.stop_instance(&instance, true).await;
         self.driver.delete_instance(&instance).await?;
-        self.registry.lock().expect("registry lock").remove(id);
+        self.store.delete(id).await?;
         Ok(())
     }
 
@@ -143,6 +132,7 @@ impl PreviewManager {
 pub(crate) mod testbed {
     use super::*;
     use crate::types::PreviewSpec;
+    use crate::InMemoryPreviewStore;
 
     pub(crate) fn spec() -> PreviewSpec {
         PreviewSpec {
@@ -190,7 +180,10 @@ pub(crate) mod testbed {
 
     pub(crate) fn manager() -> (PreviewManager, RecordingPreviewDriver) {
         let driver = RecordingPreviewDriver::default();
-        (PreviewManager::new(Arc::new(driver.clone())), driver)
+        (
+            PreviewManager::new(Arc::new(driver.clone()), Arc::new(InMemoryPreviewStore::new())),
+            driver,
+        )
     }
 }
 
@@ -225,7 +218,7 @@ mod tests {
             mode: "pinned".to_string(),
         };
         manager.create(other).await.unwrap();
-        let project = manager.list(first.project_id);
+        let project = manager.list(first.project_id).await.unwrap();
         assert_eq!(project.len(), 1);
         assert_eq!(project[0].id, first.id);
     }
@@ -255,7 +248,7 @@ mod tests {
         let (manager, driver) = manager();
         let preview = manager.create(spec()).await.unwrap();
         manager.teardown(&preview.id).await.unwrap();
-        assert!(manager.get(&preview.id).is_none());
+        assert!(manager.get(&preview.id).await.unwrap().is_none());
         let calls = driver.calls.lock().unwrap();
         assert!(calls
             .iter()
@@ -284,5 +277,15 @@ mod tests {
             created_at: "now".to_string(),
         };
         assert_eq!(manager.instance_for(&preview), "prv-12345678");
+    }
+
+    #[tokio::test]
+    async fn list_and_get_use_store_state() {
+        let (manager, _driver) = manager();
+        let created = manager.create(spec()).await.unwrap();
+        let listed = manager.list(created.project_id).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        let got = manager.get(&created.id).await.unwrap();
+        assert_eq!(got.unwrap().id, created.id);
     }
 }

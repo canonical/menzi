@@ -19,7 +19,27 @@ async fn main() {
     );
 
     let driver = Arc::new(menzi_previews::LxdPreviewDriver::new(lxd));
-    let manager = Arc::new(menzi_previews::PreviewManager::new(driver));
+    let store: Arc<dyn menzi_previews::PreviewStore> = match sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&config.database_url)
+        .await
+    {
+        Ok(pool) => {
+            let store = menzi_previews::PostgresPreviewStore::new(pool);
+            if let Err(error) = store.migrate().await {
+                tracing::warn!("preview migration failed: {error}");
+                Arc::new(menzi_previews::InMemoryPreviewStore::new())
+            } else {
+                Arc::new(store)
+            }
+        }
+        Err(error) => {
+            tracing::warn!("database unavailable, previews stay in memory: {error}");
+            Arc::new(menzi_previews::InMemoryPreviewStore::new())
+        }
+    };
+    let manager = Arc::new(menzi_previews::PreviewManager::new(driver, store));
 
     let source_instance =
         std::env::var("MENZI_SOURCE_INSTANCE").unwrap_or_else(|_| "mz-workspace".to_string());
