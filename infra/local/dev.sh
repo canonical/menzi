@@ -15,7 +15,6 @@ if ! lxc info "${MENZI_SOURCE_INSTANCE:-mz-workspace}" >/dev/null 2>&1 \
   echo "error: LXD template '${MENZI_SOURCE_INSTANCE:-mz-workspace}' is missing." >&2
   echo "build it once with:" >&2
   echo "  sudo MENZI_WORKSPACE_PROFILE=default infra/local/workspace-image.sh" >&2
-  echo "note: this needs an opencode v1 binary; v2 requires auth and will fail workspace startup" >&2
   exit 1
 fi
 

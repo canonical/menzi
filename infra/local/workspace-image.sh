@@ -107,6 +107,7 @@ User=$AGENT_USER
 WorkingDirectory=/workspace
 Environment=HOME=$AGENT_HOME
 Environment=OPENCODE_CONFIG_DIR=$AGENT_HOME/.config/opencode
+Environment=OPENCODE_SERVER_USERNAME=opencode
 ExecStart=/usr/local/bin/opencode serve --hostname 0.0.0.0 --port $PORT
 Restart=always
 RestartSec=3
@@ -120,9 +121,9 @@ UNIT"
 echo "verifying opencode starts and answers"
 lxc exec "$BUILD" -- systemctl daemon-reload
 lxc exec "$BUILD" -- systemctl enable --now opencode.service
-if ! lxc exec "$BUILD" -- bash -c "for i in \$(seq 1 30); do curl -fsS http://127.0.0.1:$PORT/api/model >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1"; then
+if ! lxc exec "$BUILD" -- bash -c "for i in \$(seq 1 30); do code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/api/model || true); [ \"\$code\" = \"401\" ] && exit 0; sleep 1; done; exit 1"; then
   lxc exec "$BUILD" -- journalctl -u opencode --no-pager | tail -30
-  echo "error: opencode never answered on $PORT; a version that demands a password will not work here" >&2
+  echo "error: opencode did not answer with auth required on $PORT" >&2
   exit 1
 fi
 
