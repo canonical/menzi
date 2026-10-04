@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
+import { getErrorMessage } from '../../lib/api/errors';
 import { listMessages, sendPrompt } from '../../lib/api/opencode';
 import { queryKeys } from '../../lib/routes';
 import { useStickyScroll } from '../../hooks/useStickyScroll';
