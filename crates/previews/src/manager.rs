@@ -52,10 +52,7 @@ pub struct PreviewManager {
 
 impl PreviewManager {
     pub fn new(driver: Arc<dyn PreviewDriver>, store: Arc<dyn PreviewStore>) -> Self {
-        Self {
-            driver,
-            store,
-        }
+        Self { driver, store }
     }
 
     pub async fn create(&self, spec: PreviewSpec) -> Result<Preview> {
@@ -181,7 +178,10 @@ pub(crate) mod testbed {
     pub(crate) fn manager() -> (PreviewManager, RecordingPreviewDriver) {
         let driver = RecordingPreviewDriver::default();
         (
-            PreviewManager::new(Arc::new(driver.clone()), Arc::new(InMemoryPreviewStore::new())),
+            PreviewManager::new(
+                Arc::new(driver.clone()),
+                Arc::new(InMemoryPreviewStore::new()),
+            ),
             driver,
         )
     }

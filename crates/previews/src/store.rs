@@ -114,7 +114,19 @@ impl PreviewStore for PostgresPreviewStore {
     }
 
     async fn list(&self, project_id: ProjectId) -> Result<Vec<Preview>> {
-        let rows = sqlx::query_as::<_, (String, uuid::Uuid, Option<String>, Option<String>, String, String, String, chrono::DateTime<chrono::Utc>)>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                String,
+                uuid::Uuid,
+                Option<String>,
+                Option<String>,
+                String,
+                String,
+                String,
+                chrono::DateTime<chrono::Utc>,
+            ),
+        >(
             "SELECT id, project_id, commit_sha, branch, status, mode, url, created_at
              FROM preview_registry
              WHERE project_id = $1 AND deleted_at IS NULL
@@ -129,7 +141,19 @@ impl PreviewStore for PostgresPreviewStore {
     }
 
     async fn get(&self, id: &str) -> Result<Option<Preview>> {
-        let row = sqlx::query_as::<_, (String, uuid::Uuid, Option<String>, Option<String>, String, String, String, chrono::DateTime<chrono::Utc>)>(
+        let row = sqlx::query_as::<
+            _,
+            (
+                String,
+                uuid::Uuid,
+                Option<String>,
+                Option<String>,
+                String,
+                String,
+                String,
+                chrono::DateTime<chrono::Utc>,
+            ),
+        >(
             "SELECT id, project_id, commit_sha, branch, status, mode, url, created_at
              FROM preview_registry
              WHERE id = $1 AND deleted_at IS NULL",
@@ -142,11 +166,13 @@ impl PreviewStore for PostgresPreviewStore {
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        sqlx::query("UPDATE preview_registry SET deleted_at = now(), updated_at = now() WHERE id = $1")
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| MenziError::Database(e.to_string()))?;
+        sqlx::query(
+            "UPDATE preview_registry SET deleted_at = now(), updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MenziError::Database(e.to_string()))?;
         Ok(())
     }
 }
