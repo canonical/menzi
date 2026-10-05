@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useIsMutating, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@canonical/react-components';
 import { DataState } from '../../components/DataState';
 import { getErrorMessage } from '../../lib/api/errors';
@@ -40,7 +40,9 @@ function errorText(info: MessageInfo): string {
 
 function MessageParts({ parts }: { parts: MessagePart[] }) {
   const runs = groupableRuns(parts.filter(isToolPart));
-  let cursor = 0;
+  let runIndex = 0;
+  let currentRun: (typeof runs)[number] | null = null;
+  let currentRunRemaining = 0;
 
   return (
     <>
@@ -48,12 +50,22 @@ function MessageParts({ parts }: { parts: MessagePart[] }) {
         const key = isToolPart(part) ? part.id : `${part.type}-${index}`;
 
         if (isToolPart(part)) {
-          const run = runs[cursor];
-          cursor += 1;
-          if (run.kind === 'group') {
-            return <ToolCallGroup key={key} parts={run.parts} />;
+          if (currentRunRemaining === 0) {
+            currentRun = runs[runIndex] ?? { kind: 'single', part };
+            runIndex += 1;
+            currentRunRemaining = currentRun.kind === 'group' ? currentRun.parts.length : 1;
           }
-          return <ToolCallStep key={key} part={part} />;
+
+          const firstInRun =
+            currentRun?.kind === 'group'
+              ? currentRunRemaining === currentRun.parts.length
+              : currentRunRemaining === 1;
+          currentRunRemaining = Math.max(0, currentRunRemaining - 1);
+
+          if (currentRun?.kind === 'group') {
+            return firstInRun ? <ToolCallGroup key={key} parts={currentRun.parts} /> : null;
+          }
+          return <ToolCallStep key={key} part={currentRun?.part ?? part} />;
         }
 
         if (isTextPart(part)) {
@@ -199,6 +211,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
   );
 
   const working = isWorking(messagesQuery.data?.messages ?? []);
+  const sending = useIsMutating({ mutationKey: ['opencode', 'prompt', sessionId] }) > 0;
   const { forms, pending, submit, dismiss } = useSessionForms(sessionId);
   const [hiddenFallback, setHiddenFallback] = useState<Record<string, true>>({});
   const fallback = useMemo(() => fallbackForms(messagesQuery.data, sessionId), [messagesQuery.data, sessionId]);
@@ -276,7 +289,7 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
               }}
             />
           ))}
-          {pending.length > 0 ? <p role="status" className="app-chat-working">{S.questions.waiting}</p> : working ? (
+          {pending.length > 0 ? <p role="status" className="app-chat-working">{S.questions.waiting}</p> : (working || sending) ? (
             <div className="app-chat-working">
               <WorkingLabel />
             </div>

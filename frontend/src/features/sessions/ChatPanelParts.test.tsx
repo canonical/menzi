@@ -205,4 +205,38 @@ describe('ChatPanel parts', () => {
     expect(labelTexts()).toEqual(['Running: echo menzi-tool-probe', 'Reading: hostname']);
     expect(screen.queryByText('tool-calls')).not.toBeInTheDocument();
   });
+
+  it('does not crash when multiple grouped tool parts are in one assistant turn', async () => {
+    mockApi([
+      {
+        info: { id: 'g1', sessionID: SESSION, role: 'assistant', finish: 'tool-calls' },
+        parts: [
+          {
+            type: 'tool',
+            id: 'prt_1',
+            tool: 'shell',
+            state: { status: 'completed', input: { command: 'echo one' }, output: 'one\n' },
+          },
+          {
+            type: 'tool',
+            id: 'prt_2',
+            tool: 'shell',
+            state: { status: 'completed', input: { command: 'echo two' }, output: 'two\n' },
+          },
+          {
+            type: 'tool',
+            id: 'prt_3',
+            tool: 'shell',
+            state: { status: 'completed', input: { command: 'echo three' }, output: 'three\n' },
+          },
+        ],
+      },
+    ]);
+
+    const { container } = renderPanel();
+
+    expect(await screen.findByText('Ran 3 commands')).toBeInTheDocument();
+    expect(container.querySelectorAll('.app-tcg')).toHaveLength(1);
+    expect(container.querySelectorAll('.app-tc')).toHaveLength(3);
+  });
 });
