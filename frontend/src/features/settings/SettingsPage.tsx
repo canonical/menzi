@@ -11,12 +11,14 @@ import {
 } from '@canonical/react-components';
 import { S } from '../../strings/catalogue';
 import { AccountSection } from './AccountSection';
+import { SshKeysSection } from './SshKeysSection';
 
 const SETTINGS_TABS = [
   { id: 'account', label: S.auth.accountHeading },
   { id: 'profile', label: S.settings.tabs.profile },
   { id: 'models', label: S.settings.tabs.modelAccounts },
   { id: 'notifications', label: S.settings.tabs.notifications },
+  { id: 'ssh-keys', label: S.settings.tabs.sshKeys },
 ];
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -120,6 +122,7 @@ export function SettingsPage() {
               />
             </div>
           )}
+          {activeTab === 'ssh-keys' && <SshKeysSection />}
         </div>
       </div>
     </div>
