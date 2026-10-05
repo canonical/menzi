@@ -10,7 +10,7 @@ pub struct Database {
 impl Database {
     pub async fn connect(database_url: &str) -> Result<Self> {
         let pool = PgPoolOptions::new()
-            .max_connections(20)
+            .max_connections(20_u32)
             .connect(database_url)
             .await
             .map_err(|e| menzi_common::MenziError::Database(e.to_string()))?;
