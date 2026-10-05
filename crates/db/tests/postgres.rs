@@ -39,7 +39,7 @@ async fn cleanup_database(admin_url: &str, name: &str) {
         .expect("drop test database");
 }
 
-const MIGRATION_COUNT: i64 = 8;
+const MIGRATION_COUNT: i64 = 11;
 
 const EXPECTED_TABLES: &[&str] = &[
     "users",
@@ -65,6 +65,8 @@ const EXPECTED_TABLES: &[&str] = &[
     "web_push_subscriptions",
     "jobs",
     "templates",
+    "project_development_scripts",
+    "user_ssh_keys",
 ];
 
 #[tokio::test]
