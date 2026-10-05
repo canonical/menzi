@@ -147,6 +147,7 @@ export interface Project {
   name: string;
   slug: string;
   description: string | null;
+  repository_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -155,6 +156,30 @@ export interface CreateProjectInput {
   name: string;
   slug: string;
   description?: string;
+  repository_url?: string;
+}
+
+export interface DevelopmentScript {
+  id: string;
+  project_id: string;
+  name: string;
+  slug: string;
+  relative_path: string | null;
+  body: string;
+  source: 'imported' | 'manual' | string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserSshKey {
+  id: string;
+  label: string;
+  public_key: string;
+  fingerprint_sha256: string;
+  is_default: boolean;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ListProjectsInput {

@@ -18,5 +18,6 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
     name: input.name,
     slug: input.slug,
     description: input.description ?? null,
+    repository_url: input.repository_url ?? null,
   });
 }

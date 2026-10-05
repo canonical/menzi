@@ -6,6 +6,7 @@ const PROJECT = {
   name: 'Storefront',
   slug: 'storefront',
   description: 'Customer facing app',
+  repository_url: 'git@github.com:acme/storefront.git',
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-02T00:00:00Z',
 };
@@ -69,6 +70,7 @@ describe('projects api', () => {
       name: 'Storefront',
       slug: 'storefront',
       description: null,
+      repository_url: null,
     });
   });
 

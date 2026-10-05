@@ -9,6 +9,7 @@ export const routes = {
       `/projects/${projectId}/code?session=${sessionId}`,
     design: (projectId: string) => `/projects/${projectId}/design`,
     project: (projectId: string) => `/projects/${projectId}/project`,
+    developmentScripts: (projectId: string) => `/projects/${projectId}/development-scripts`,
     previews: (projectId: string) => `/projects/${projectId}/previews`,
   },
   environment: (workspaceId: string) => `/workspaces/${workspaceId}/environment`,
@@ -23,9 +24,9 @@ export const routes = {
   },
 };
 
-export type ProjectSection = 'code' | 'design' | 'project';
+export type ProjectSection = 'code' | 'design' | 'project' | 'development-scripts';
 
-export const PROJECT_SECTIONS: ProjectSection[] = ['code', 'design', 'project'];
+export const PROJECT_SECTIONS: ProjectSection[] = ['code', 'design', 'project', 'development-scripts'];
 
 export function isProjectSection(value: string): value is ProjectSection {
   return (PROJECT_SECTIONS as string[]).includes(value);
@@ -37,6 +38,8 @@ export function projectSectionPath(projectId: string, section: ProjectSection): 
       return routes.projects.design(projectId);
     case 'project':
       return routes.projects.project(projectId);
+    case 'development-scripts':
+      return routes.projects.developmentScripts(projectId);
     default:
       return routes.projects.code(projectId);
   }
@@ -59,6 +62,10 @@ export const apiPaths = {
   projects: {
     list: () => '/api/v1/projects',
     detail: (projectId: string) => `/api/v1/projects/${projectId}`,
+    developmentScripts: (projectId: string) =>
+      `/api/v1/projects/${projectId}/development-scripts`,
+    developmentScript_: (projectId: string, scriptId: string) =>
+      `/api/v1/projects/${projectId}/development-scripts/${scriptId}`,
   },
   previews: {
     list: (projectId: string) => `/api/v1/projects/${projectId}/previews`,
@@ -94,6 +101,11 @@ export const apiPaths = {
     diff: (userId: string, projectId: string) =>
       `/api/v1/workspaces/${userId}/${projectId}/diff`,
     forProject: (projectId: string) => `/api/v1/projects/${projectId}/workspaces`,
+  },
+  me: {
+    sshKeys: () => '/api/v1/me/ssh-keys',
+    sshKeyGenerate: () => '/api/v1/me/ssh-keys/generate',
+    sshKey_: (id: string) => `/api/v1/me/ssh-keys/${id}`,
   },
   env: {
     health: () => '/api/env/health',
