@@ -15,6 +15,7 @@ pub struct ProjectResponse {
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
+    pub repository_url: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -24,6 +25,7 @@ pub struct CreateProjectRequest {
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
+    pub repository_url: Option<String>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -33,7 +35,7 @@ pub struct ListProjectsQuery {
 
 const MAX_NAME_LENGTH: usize = 120;
 
-type ProjectRow = (String, String, String, Option<String>, String, String);
+type ProjectRow = (String, String, String, Option<String>, Option<String>, String, String);
 
 fn map_row(row: ProjectRow) -> ProjectResponse {
     ProjectResponse {
@@ -41,9 +43,21 @@ fn map_row(row: ProjectRow) -> ProjectResponse {
         name: row.1,
         slug: row.2,
         description: row.3,
-        created_at: row.4,
-        updated_at: row.5,
+        repository_url: row.4,
+        created_at: row.5,
+        updated_at: row.6,
     }
+}
+
+fn looks_like_ssh_repository(url: &str) -> bool {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let scheme = trimmed.starts_with("ssh://");
+    let scp = trimmed.contains('@') && trimmed.contains(':') && !trimmed.contains(" ");
+    let git_at = trimmed.starts_with("git@") && trimmed.contains(':');
+    (scheme || scp || git_at) && trimmed.ends_with(".git")
 }
 
 fn error_response(status: StatusCode, message: &str) -> Response {
@@ -82,7 +96,7 @@ pub async fn list_projects(
         .map(|value| format!("%{}%", value.to_lowercase()));
 
     let rows = sqlx::query_as::<_, ProjectRow>(
-        "SELECT p.id::text, p.name, p.slug, p.description, p.created_at::text, \
+        "SELECT p.id::text, p.name, p.slug, p.description, p.repository_url, p.created_at::text, \
          p.updated_at::text \
          FROM projects p \
          JOIN project_members m ON m.project_id = p.id \
@@ -142,6 +156,19 @@ pub async fn create_project(
     if body.slug.trim().is_empty() {
         return error_response(StatusCode::BAD_REQUEST, "slug must not be empty");
     }
+    let repository_url = body
+        .repository_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(url) = repository_url {
+        if !looks_like_ssh_repository(url) {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "repository_url must be an SSH git URL ending in .git",
+            );
+        }
+    }
     if !body
         .slug
         .trim()
@@ -155,12 +182,13 @@ pub async fn create_project(
     }
 
     let row = sqlx::query_as::<_, ProjectRow>(
-        "INSERT INTO projects (name, slug, description) VALUES ($1, $2, $3) \
-         RETURNING id::text, name, slug, description, created_at::text, updated_at::text",
+        "INSERT INTO projects (name, slug, description, repository_url) VALUES ($1, $2, $3, $4) \
+         RETURNING id::text, name, slug, description, repository_url, created_at::text, updated_at::text",
     )
     .bind(body.name.trim())
     .bind(body.slug.trim().to_lowercase())
     .bind(body.description.as_deref())
+    .bind(repository_url)
     .fetch_one(&pool)
     .await;
 
@@ -201,16 +229,29 @@ pub async fn create_project(
         (status = 404, description = "Project not found")
     )
 )]
-pub async fn get_project(State(pool): State<PgPool>, Path(id): Path<String>) -> Response {
+pub async fn get_project(
+    State(pool): State<PgPool>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(caller_id) = caller_uuid(&caller) else {
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "who is calling is not established",
+        );
+    };
     if Uuid::parse_str(&id).is_err() {
         return error_response(StatusCode::NOT_FOUND, "project not found");
     }
 
     let row = sqlx::query_as::<_, ProjectRow>(
-        "SELECT id::text, name, slug, description, created_at::text, updated_at::text \
-         FROM projects WHERE id = $1::uuid",
+        "SELECT p.id::text, p.name, p.slug, p.description, p.repository_url, p.created_at::text, p.updated_at::text \
+         FROM projects p \
+         JOIN project_members m ON m.project_id = p.id \
+         WHERE p.id = $1::uuid AND m.user_id = $2::uuid",
     )
     .bind(Uuid::parse_str(&id).ok())
+    .bind(caller_id)
     .fetch_optional(&pool)
     .await;
 
@@ -220,5 +261,22 @@ pub async fn get_project(State(pool): State<PgPool>, Path(id): Path<String>) -> 
         Err(error) => {
             error_response(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()).into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::looks_like_ssh_repository;
+
+    #[test]
+    fn accepts_ssh_git_urls() {
+        assert!(looks_like_ssh_repository("git@github.com:acme/repo.git"));
+        assert!(looks_like_ssh_repository("ssh://git@gitlab.com/acme/repo.git"));
+    }
+
+    #[test]
+    fn rejects_non_ssh_or_non_git_urls() {
+        assert!(!looks_like_ssh_repository("https://github.com/acme/repo.git"));
+        assert!(!looks_like_ssh_repository("git@github.com:acme/repo"));
     }
 }
