@@ -15,7 +15,7 @@ requires:
   nats:
     interface: nats
   lxd:
-    interface: lxd
+    interface: lxd-https
 parts:
   charm:
     plugin: uv
