@@ -78,9 +78,9 @@ relations:
   - [orchestrator:nats, nats:client]
   - [llm-gateway:nats, nats:client]
 
-  - [workspace:lxd, lxd:lxd]
-  - [orchestrator:lxd, lxd:lxd]
-  - [previews:lxd, lxd:lxd]
+  - [workspace:lxd, lxd:https]
+  - [orchestrator:lxd, lxd:https]
+  - [previews:lxd, lxd:https]
 
   - [haproxy:reverseproxy, frontend:website]
   - [haproxy:reverseproxy, core-api:website]
