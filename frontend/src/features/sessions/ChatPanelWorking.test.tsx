@@ -35,11 +35,12 @@ function renderPanel(messages: unknown[]) {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   listMessages.mockResolvedValue({ messages });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <ChatPanel sessionId="ses_1" />
     </QueryClientProvider>,
   );
+  return { client, ...view };
 }
 
 beforeEach(() => {
@@ -119,6 +120,35 @@ describe('ChatPanel working label', () => {
     renderPanel([user('go')]);
     expect(await screen.findByTestId('msg-user')).toBeInTheDocument();
     expect(screen.queryByTestId('working-label')).not.toBeInTheDocument();
+  });
+
+  it('is shown while a prompt mutation is pending', async () => {
+    const { client } = renderPanel([user('go')]);
+    expect(await screen.findByTestId('msg-user')).toBeInTheDocument();
+
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await act(async () => {
+      void client
+        .getMutationCache()
+        .build(client, {
+          mutationKey: ['opencode', 'prompt', 'ses_1'],
+          mutationFn: async () => {
+            await gate;
+            return {};
+          },
+        })
+        .execute('hello');
+    });
+
+    expect(await screen.findByTestId('working-label')).toBeInTheDocument();
+
+    await act(async () => {
+      release();
+    });
   });
 
   it('appears after a tool call that is still running', async () => {

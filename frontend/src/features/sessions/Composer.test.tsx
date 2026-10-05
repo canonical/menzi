@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Composer } from './Composer';
+import { queryKeys } from '../../lib/routes';
 
 const sendPrompt = vi.fn();
 const listModels = vi.fn().mockResolvedValue([]);
@@ -16,11 +17,12 @@ vi.mock('../../lib/api/opencode', () => ({
 
 function renderComposer() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <Composer sessionId="ses_1" />
     </QueryClientProvider>,
   );
+  return { client, ...view };
 }
 
 beforeEach(() => {
@@ -62,6 +64,50 @@ describe('Composer', () => {
     await waitFor(() => expect(input).toHaveValue(''));
     expect(sendPrompt).toHaveBeenCalledTimes(1);
     release({ info: { id: 'msg_1' }, parts: [] });
+  });
+
+  it('shows an optimistic user message immediately', async () => {
+    let release: (value: unknown) => void = () => {};
+    sendPrompt.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    const { client } = renderComposer();
+
+    await userEvent.type(screen.getByLabelText('Message'), 'show now');
+    await userEvent.click(screen.getByRole('button'));
+
+    await waitFor(() => {
+      const cached = client.getQueryData<{ messages: Array<{ info: { role: string }; parts: Array<{ type: string; text?: string }> }> }>(
+        queryKeys.opencode.messages('ses_1'),
+      );
+      expect(cached?.messages.some((message) =>
+        message.info.role === 'user' &&
+        message.parts.some((part) => part.type === 'text' && part.text === 'show now')),
+      ).toBe(true);
+    });
+
+    release({ info: { id: 'msg_1' }, parts: [] });
+  });
+
+  it('removes the optimistic user message when send fails', async () => {
+    sendPrompt.mockRejectedValue(new Error('proxy refused'));
+    const { client } = renderComposer();
+
+    await userEvent.type(screen.getByLabelText('Message'), 'transient');
+    await userEvent.click(screen.getByRole('button'));
+
+    await waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      const cached = client.getQueryData<{ messages: Array<{ info: { role: string }; parts: Array<{ type: string; text?: string }> }> }>(
+        queryKeys.opencode.messages('ses_1'),
+      );
+      expect(cached?.messages.some((message) =>
+        message.info.role === 'user' &&
+        message.parts.some((part) => part.type === 'text' && part.text === 'transient')),
+      ).toBe(false);
+    });
   });
 
   it('puts the message back when the send failed', async () => {
