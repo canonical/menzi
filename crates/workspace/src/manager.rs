@@ -8,6 +8,7 @@ use tokio::sync::{Mutex as AsyncMutex, RwLock};
 use crate::credentials::{OpencodeAuth, WorkspaceCredentialManager};
 use crate::driver::{ProvisionOutcome, WorkspaceDriver};
 use crate::gateway::OpencodeGateway;
+use crate::bootstrap::{DevelopmentScriptImport, NoopWorkspaceBootstrapStore, WorkspaceBootstrapStore};
 use crate::registry::{SessionBinding, SessionKind, SessionRegistry};
 use crate::store::WorkspaceStore;
 use crate::types::{
@@ -66,6 +67,7 @@ pub struct WorkspaceManager {
     health_attempts: u32,
     health_delay: std::time::Duration,
     credentials: WorkspaceCredentialManager,
+    bootstrap: Arc<dyn WorkspaceBootstrapStore>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +102,7 @@ impl WorkspaceManager {
             health_attempts: 15,
             health_delay: std::time::Duration::from_secs(2),
             credentials: WorkspaceCredentialManager::from_env(),
+            bootstrap: Arc::new(NoopWorkspaceBootstrapStore),
         }
     }
 
@@ -116,6 +119,11 @@ impl WorkspaceManager {
     pub fn with_health_wait(mut self, attempts: u32, delay: std::time::Duration) -> Self {
         self.health_attempts = attempts;
         self.health_delay = delay;
+        self
+    }
+
+    pub fn with_bootstrap(mut self, bootstrap: Arc<dyn WorkspaceBootstrapStore>) -> Self {
+        self.bootstrap = bootstrap;
         self
     }
 
@@ -271,6 +279,16 @@ impl WorkspaceManager {
                     .record("provision:failed", principal, key, &error.to_string());
                 return Err(error);
             }
+        }
+
+        if let Err(error) = self.bootstrap_workspace(key, &instance).await {
+            workspace.status = WorkspaceStatus::Requested;
+            workspace.last_error = Some(error.to_string());
+            workspace.updated_at = now();
+            self.store.save(&workspace).await?;
+            self.audit
+                .record("provision:failed", principal, key, &error.to_string());
+            return Err(error);
         }
 
         workspace.status = WorkspaceStatus::Ready;
@@ -939,6 +957,87 @@ impl WorkspaceManager {
         Ok(result.stdout)
     }
 
+    async fn bootstrap_workspace(&self, key: &WorkspaceKey, instance: &str) -> Result<()> {
+        let data = self.bootstrap.load(key.user_id, key.project_id).await?;
+        if let Some(repository_url) = data.repository_url.as_deref() {
+            let Some(private_key) = data.ssh_private_key.as_deref() else {
+                return Err(MenziError::Validation(
+                    "repository cloning needs an SSH key on your profile".to_string(),
+                ));
+            };
+            self.clone_repository(instance, repository_url, private_key).await?;
+        }
+        if !self.bootstrap.has_scripts(key.project_id).await? {
+            let imported = self.load_scripts_from_workspace(instance).await?;
+            if !imported.is_empty() {
+                self.bootstrap
+                    .import_scripts(key.user_id, key.project_id, imported)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn clone_repository(&self, instance: &str, repository_url: &str, private_key: &str) -> Result<()> {
+        let host = repository_host(repository_url).unwrap_or_default();
+        let script = format!(
+            "set -e\nif [ -d /workspace/.git ]; then exit 0; fi\nmkdir -p /home/menzi/.ssh\nchmod 700 /home/menzi/.ssh\nkey_file=$(mktemp /home/menzi/.ssh/menzi_key_XXXXXX)\ntrap 'rm -f \"$key_file\"' EXIT\ncat > \"$key_file\" <<'EOF'\n{}\nEOF\nchmod 600 \"$key_file\"\nif [ -n '{}' ]; then ssh-keyscan -H '{}' >> /home/menzi/.ssh/known_hosts 2>/dev/null || true; fi\nexport GIT_SSH_COMMAND=\"ssh -i $key_file -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new\"\ngit clone '{}' /workspace\n",
+            private_key,
+            host,
+            host,
+            repository_url,
+        );
+        let login = format!("bash -lc {}", sh_quote(&script));
+        let as_menzi = format!("su - menzi -s /bin/bash -c {}", sh_quote(&login));
+        let request = TerminalRequest::new("sh")
+            .arg("-lc")
+            .arg(as_menzi)
+            .in_dir("/")
+            .timeout_secs(Some(180));
+        let result = self.driver.exec(instance, &request).await?;
+        if result.exit_code != 0 {
+            return Err(MenziError::Validation("repository clone failed".to_string()));
+        }
+        Ok(())
+    }
+
+    async fn load_scripts_from_workspace(&self, instance: &str) -> Result<Vec<DevelopmentScriptImport>> {
+        let list_request = TerminalRequest::new("sh")
+            .arg("-lc")
+            .arg("cd /workspace && if [ -d .menzi/scripts/dev ]; then find .menzi/scripts/dev -maxdepth 1 -type f -name '*.sh' -print; fi")
+            .in_dir("/workspace")
+            .timeout_secs(Some(30));
+        let listed = self.driver.exec(instance, &list_request).await?;
+        if listed.exit_code != 0 {
+            return Ok(Vec::new());
+        }
+        let mut scripts = Vec::new();
+        for raw in listed.stdout.lines() {
+            let path = raw.trim();
+            if path.is_empty() {
+                continue;
+            }
+            let read_request = TerminalRequest::new("sh")
+                .arg("-lc")
+                .arg(format!("cd /workspace && cat {}", sh_quote(path)))
+                .in_dir("/workspace")
+                .timeout_secs(Some(30));
+            let body = self.driver.exec(instance, &read_request).await?;
+            if body.exit_code != 0 {
+                continue;
+            }
+            let name = path.rsplit('/').next().unwrap_or(path).to_string();
+            let stem = name.strip_suffix(".sh").unwrap_or(name.as_str());
+            scripts.push(DevelopmentScriptImport {
+                name: stem.replace('-', " "),
+                slug: slugify(stem),
+                relative_path: path.to_string(),
+                body: body.stdout,
+            });
+        }
+        Ok(scripts)
+    }
+
     pub async fn destroy_workspace(&self, principal: &str, key: &WorkspaceKey) -> Result<()> {
         let lock = self.lock_for(*key);
         let _guard = lock.lock().await;
@@ -1137,6 +1236,41 @@ fn new_terminal() -> WorkspaceTerminal {
 
 fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn repository_host(repository_url: &str) -> Option<String> {
+    let trimmed = repository_url.trim();
+    if let Some(without) = trimmed.strip_prefix("ssh://") {
+        let after_auth = without.split('@').last().unwrap_or(without);
+        let host = after_auth.split('/').next().unwrap_or(after_auth);
+        return Some(host.split(':').next().unwrap_or(host).to_string());
+    }
+    if let Some(after) = trimmed.split('@').nth(1) {
+        return Some(after.split(':').next().unwrap_or(after).to_string());
+    }
+    None
+}
+
+fn slugify(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut prev_dash = false;
+    for ch in input.chars() {
+        let next = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else {
+            '-'
+        };
+        if next == '-' {
+            if !prev_dash {
+                out.push('-');
+            }
+            prev_dash = true;
+        } else {
+            out.push(next);
+            prev_dash = false;
+        }
+    }
+    out.trim_matches('-').to_string()
 }
 
 fn append_chunk(terminal: &mut WorkspaceTerminal, stream: &str, text: String) {
@@ -2890,5 +3024,23 @@ mod tests {
             .unwrap()
             .iter()
             .any(|call| call == &format!("destroy:{}", k.instance_name())));
+    }
+
+    #[test]
+    fn repository_host_parses_git_urls() {
+        assert_eq!(
+            repository_host("git@github.com:acme/storefront.git").as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(
+            repository_host("ssh://git@gitlab.com/acme/storefront.git").as_deref(),
+            Some("gitlab.com")
+        );
+    }
+
+    #[test]
+    fn slugify_normalizes_names() {
+        assert_eq!(slugify("Frontend API"), "frontend-api");
+        assert_eq!(slugify("  backend---dev.sh "), "backend-dev-sh");
     }
 }

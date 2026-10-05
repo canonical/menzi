@@ -1,10 +1,15 @@
 use async_trait::async_trait;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use menzi_common::{MenziError, Result};
+use menzi_workspace::bootstrap::{DevelopmentScriptImport, WorkspaceBootstrapData, WorkspaceBootstrapStore};
+use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::info;
+use uuid::Uuid;
 
 use menzi_workspace::identity::{Authorizer, Principal};
 use menzi_workspace::manager::WorkspaceAudit;
@@ -74,6 +79,143 @@ struct Wiring {
     authorizer: Arc<dyn Authorizer>,
     audit: Option<Arc<DbAudit>>,
     reconcile_gate: Arc<dyn ReconcileGate>,
+    bootstrap: Arc<dyn WorkspaceBootstrapStore>,
+}
+
+#[derive(Clone)]
+struct SshKeyCipher {
+    key: [u8; 32],
+}
+
+impl SshKeyCipher {
+    fn from_env() -> Self {
+        let secret = std::env::var("MENZI_SSH_KEY_ENCRYPTION_KEY")
+            .unwrap_or_else(|_| "menzi-dev-ssh-key-encryption-key".to_string());
+        let digest = Sha256::digest(secret.as_bytes());
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&digest[..32]);
+        Self { key }
+    }
+
+    fn decrypt(&self, payload: &str) -> Result<String> {
+        use aes_gcm::aead::Aead;
+        use aes_gcm::aead::KeyInit;
+        use aes_gcm::{Aes256Gcm, Key, Nonce};
+
+        let decoded = BASE64
+            .decode(payload)
+            .map_err(|error| MenziError::Validation(format!("invalid credential payload: {error}")))?;
+        if decoded.len() < 13 {
+            return Err(MenziError::Validation(
+                "invalid credential payload length".to_string(),
+            ));
+        }
+        let (nonce, ciphertext) = decoded.split_at(12);
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let plaintext = cipher
+            .decrypt(Nonce::from_slice(nonce), ciphertext)
+            .map_err(|error| MenziError::Validation(format!("credential decrypt failed: {error}")))?;
+        String::from_utf8(plaintext)
+            .map_err(|error| MenziError::Validation(format!("credential is not utf8: {error}")))
+    }
+}
+
+struct DbBootstrapStore {
+    pool: PgPool,
+    cipher: SshKeyCipher,
+}
+
+impl DbBootstrapStore {
+    fn new(pool: PgPool) -> Self {
+        Self {
+            pool,
+            cipher: SshKeyCipher::from_env(),
+        }
+    }
+}
+
+#[async_trait]
+impl WorkspaceBootstrapStore for DbBootstrapStore {
+    async fn load(
+        &self,
+        user_id: menzi_common::ids::UserId,
+        project_id: menzi_common::ids::ProjectId,
+    ) -> Result<WorkspaceBootstrapData> {
+        let repository_url: Option<String> = sqlx::query_scalar(
+            "SELECT repository_url FROM projects WHERE id = $1::uuid",
+        )
+        .bind(project_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MenziError::Database(e.to_string()))?
+        .flatten();
+        let key_row: Option<(String, Option<String>)> = sqlx::query_as(
+            "SELECT private_key_encrypted, passphrase_encrypted
+             FROM user_ssh_keys
+             WHERE user_id = $1::uuid
+             ORDER BY is_default DESC, created_at DESC
+             LIMIT 1",
+        )
+        .bind(user_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MenziError::Database(e.to_string()))?;
+        let (ssh_private_key, ssh_passphrase) = match key_row {
+            Some((private, passphrase)) => {
+                let decrypted = self.cipher.decrypt(&private).ok();
+                let decrypted_passphrase = match passphrase {
+                    Some(payload) => self.cipher.decrypt(&payload).ok(),
+                    None => None,
+                };
+                (decrypted, decrypted_passphrase)
+            }
+            None => (None, None),
+        };
+        Ok(WorkspaceBootstrapData {
+            repository_url,
+            ssh_private_key,
+            ssh_passphrase,
+        })
+    }
+
+    async fn has_scripts(&self, project_id: menzi_common::ids::ProjectId) -> Result<bool> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM project_development_scripts WHERE project_id = $1::uuid",
+        )
+        .bind(project_id.as_uuid())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| MenziError::Database(e.to_string()))?;
+        Ok(count > 0)
+    }
+
+    async fn import_scripts(
+        &self,
+        user_id: menzi_common::ids::UserId,
+        project_id: menzi_common::ids::ProjectId,
+        scripts: Vec<DevelopmentScriptImport>,
+    ) -> Result<()> {
+        for script in scripts {
+            let id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO project_development_scripts
+                    (id, project_id, name, slug, relative_path, body, source, created_by)
+                 VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 'imported', $7::uuid)
+                 ON CONFLICT (project_id, slug) DO NOTHING",
+            )
+            .bind(id)
+            .bind(project_id.as_uuid())
+            .bind(script.name)
+            .bind(script.slug)
+            .bind(script.relative_path)
+            .bind(script.body)
+            .bind(user_id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MenziError::Database(e.to_string()))?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -195,6 +337,7 @@ async fn main() {
                 authorizer: Arc::new(DbAuthorizer { pool: pool.clone() }),
                 audit: Some(Arc::new(DbAudit { pool: pool.clone() })),
                 reconcile_gate: Arc::new(PostgresReconcileGate::new(pool.clone(), lock_key)),
+                bootstrap: Arc::new(DbBootstrapStore::new(pool.clone())),
             }
         }
         None => Wiring {
@@ -203,6 +346,7 @@ async fn main() {
             authorizer: Arc::new(menzi_workspace::PermissiveAuthorizer),
             audit: None,
             reconcile_gate: Arc::new(FreeReconcileGate),
+            bootstrap: Arc::new(menzi_workspace::NoopWorkspaceBootstrapStore),
         },
     };
 
@@ -213,6 +357,7 @@ async fn main() {
         source_instance.clone(),
     )
     .with_sessions(wiring.sessions);
+    manager = manager.with_bootstrap(wiring.bootstrap);
     if let Some(audit) = wiring.audit {
         manager = manager.with_audit(audit);
     }
