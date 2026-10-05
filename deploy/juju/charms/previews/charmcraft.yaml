@@ -15,7 +15,7 @@ requires:
   database:
     interface: postgresql_client
   lxd:
-    interface: lxd
+    interface: lxd-https
 parts:
   charm:
     plugin: uv
