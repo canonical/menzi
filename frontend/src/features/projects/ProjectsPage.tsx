@@ -166,6 +166,7 @@ interface CreateProjectModalProps {
     name: string;
     slug: string;
     description?: string;
+    repository_url?: string;
   }) => void;
 }
 
@@ -179,6 +180,7 @@ function CreateProjectModal({
   const [slug, setSlug] = useState('');
   const [slugTouched, setSlugTouched] = useState(false);
   const [description, setDescription] = useState('');
+  const [repositoryUrl, setRepositoryUrl] = useState('');
   const [fieldErrors, setFieldErrors] = useState<{
     name: string | null;
     slug: string | null;
@@ -202,6 +204,7 @@ function CreateProjectModal({
       name: name.trim(),
       slug: slug.trim(),
       description: description.trim() || undefined,
+      repository_url: repositoryUrl.trim() || undefined,
     });
   };
 
@@ -259,6 +262,13 @@ function CreateProjectModal({
           type="text"
           value={description}
           onChange={(event) => setDescription(event.target.value)}
+        />
+        <Input
+          id="new-project-repository-url"
+          label={S.projects.repositoryUrlLabel}
+          type="text"
+          value={repositoryUrl}
+          onChange={(event) => setRepositoryUrl(event.target.value)}
         />
         {error ? (
           <p className="p-form-validation__message" role="alert">

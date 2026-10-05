@@ -15,6 +15,7 @@ const PROJECTS = [
     name: 'Storefront',
     slug: 'storefront',
     description: 'Customer facing app',
+    repository_url: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-02T00:00:00Z',
   },
@@ -23,6 +24,7 @@ const PROJECTS = [
     name: 'Billing Service',
     slug: 'billing-service',
     description: null,
+    repository_url: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-03T00:00:00Z',
   },
@@ -189,6 +191,7 @@ describe('ProjectsPage', () => {
       name: 'Payments',
       slug: 'payments',
       description: null,
+      repository_url: null,
     });
   });
 

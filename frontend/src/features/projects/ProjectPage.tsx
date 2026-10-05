@@ -63,6 +63,14 @@ export function ProjectPage() {
                 <Icon name="file-blank" />
                 {S.projects.detail.design}
               </Button>
+              <Button
+                className="u-no-margin--bottom"
+                element={Link}
+                to={routes.projects.developmentScripts(project.id)}
+              >
+                <Icon name="code" />
+                {S.sections.developmentScripts}
+              </Button>
             </div>
 
             <WorkspaceCard projectId={project.id} userId={user?.id} />
@@ -72,6 +80,8 @@ export function ProjectPage() {
                 <dl className="p-definition-list">
                   <dt className="p-definition-list__term">{S.projects.detail.slug}</dt>
                   <dd className="p-definition-list__definition">{project.slug}</dd>
+                  <dt className="p-definition-list__term">{S.projects.detail.repositoryUrl}</dt>
+                  <dd className="p-definition-list__definition">{project.repository_url ?? '—'}</dd>
                   <dt className="p-definition-list__term">{S.projects.detail.created}</dt>
                   <dd className="p-definition-list__definition">
                     {formatDateTime(project.created_at)}

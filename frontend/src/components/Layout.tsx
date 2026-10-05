@@ -28,6 +28,7 @@ type NavItems = NonNullable<SideNavigationProps<LinkProps>['items']>;
 
 function sectionForPath(pathname: string): ProjectSection {
   if (pathname.endsWith('/design')) return 'design';
+  if (pathname.endsWith('/development-scripts')) return 'development-scripts';
   if (pathname.endsWith('/project') || pathname.endsWith('/previews')) return 'project';
   return 'code';
 }
@@ -71,6 +72,7 @@ export function Layout({ children }: LayoutProps) {
         code: routes.projects.code(projectId),
         design: routes.projects.design(projectId),
         project: routes.projects.project(projectId),
+        developmentScripts: routes.projects.developmentScripts(projectId),
       }
     : null;
   const navItems: NavItems = [
@@ -89,6 +91,7 @@ export function Layout({ children }: LayoutProps) {
         { icon: 'code', label: S.sections.code, to: projectPath.code },
         { icon: 'file-blank', label: S.sections.design, to: projectPath.design },
         { icon: 'settings', label: S.sections.project, to: projectPath.project },
+        { icon: 'code', label: S.sections.developmentScripts, to: projectPath.developmentScripts },
       ],
     });
   }

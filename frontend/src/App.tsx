@@ -12,6 +12,10 @@ function lazyPage(name: string, loader: () => Promise<Record<string, ComponentTy
 
 const ProjectsPage = lazyPage('ProjectsPage', () => import('./features/projects/ProjectsPage'));
 const ProjectPage = lazyPage('ProjectPage', () => import('./features/projects/ProjectPage'));
+const DevelopmentScriptsPage = lazyPage(
+  'DevelopmentScriptsPage',
+  () => import('./features/projects/DevelopmentScriptsPage'),
+);
 const CodePage = lazyPage('CodePage', () => import('./features/sessions/CodePage'));
 const SessionPage = lazyPage('SessionPage', () => import('./features/sessions/SessionPage'));
 const EnvironmentPage = lazyPage(
@@ -90,6 +94,10 @@ function App() {
             <Route path="/projects/:projectId/code" element={<CodePage />} />
             <Route path="/projects/:projectId/design" element={<DesignPage />} />
             <Route path="/projects/:projectId/project" element={<ProjectPage />} />
+            <Route
+              path="/projects/:projectId/development-scripts"
+              element={<DevelopmentScriptsPage />}
+            />
             <Route
               path="/workspaces/:workspaceId/environment"
               element={<EnvironmentPage />}
