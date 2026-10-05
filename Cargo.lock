@@ -1887,6 +1887,7 @@ dependencies = [
 name = "menzi-core-api"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "async-trait",
  "axum",
