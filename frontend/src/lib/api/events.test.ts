@@ -43,4 +43,22 @@ describe('toSessionEvent', () => {
     expect(started?.part).toMatchObject({ type: 'reasoning', time: { start: 100 } });
     expect(ended?.part).toMatchObject({ type: 'reasoning', time: { end: 300 } });
   });
+
+  it('infers edit tool name from input when name is missing', () => {
+    const event = toSessionEvent({
+      type: 'session.tool.input.ended',
+      data: {
+        sessionID: 'ses_1',
+        assistantMessageID: 'msg_1',
+        id: 'call_1',
+        text: '{"path":"/tmp/file.py","oldString":"a","newString":"b"}',
+      },
+    });
+
+    expect(event?.part).toMatchObject({
+      type: 'tool',
+      tool: 'edit',
+      state: { status: 'running' },
+    });
+  });
 });

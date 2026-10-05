@@ -40,6 +40,32 @@ function contentText(value: unknown): string {
     .join('\n');
 }
 
+function inferToolName(input: Record<string, unknown>): string {
+  if (typeof input.command === 'string' || typeof input.cmd === 'string') return 'shell';
+  if (typeof input.query === 'string') return 'websearch';
+  if (typeof input.url === 'string') return 'webfetch';
+  if (Array.isArray(input.questions)) return 'question';
+
+  const hasPath = typeof input.path === 'string' || typeof input.filePath === 'string';
+  const hasEdit = typeof input.oldString === 'string' || typeof input.newString === 'string' || input.replaceAll === true;
+  if (hasPath && hasEdit) return 'edit';
+  if (typeof input.filePath === 'string' && typeof input.content === 'string') return 'write';
+  if (hasPath) return 'read';
+
+  if (typeof input.pattern === 'string') {
+    if (
+      typeof input.include === 'string' ||
+      typeof input.caseSensitive === 'boolean' ||
+      typeof input.literal === 'boolean'
+    ) {
+      return 'grep';
+    }
+    return 'glob';
+  }
+
+  return '';
+}
+
 function toolStateFrom(value: unknown) {
   const state = asRecord(value);
   const status = asText(state.status);
@@ -96,10 +122,12 @@ function partsFrom(raw: Record<string, unknown>) {
       if (kind === 'tool') {
         const id = asText(part.id);
         if (!id) return null;
+        const state = asRecord(part.state);
+        const input = asRecord(state.input);
         return {
           type: 'tool',
           id,
-          tool: asText(part.name) || 'tool',
+          tool: asText(part.name) || inferToolName(input) || 'tool',
           state: toolStateFrom(part.state),
           callID: asText(part.callID) || undefined,
         };

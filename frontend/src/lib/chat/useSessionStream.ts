@@ -28,7 +28,7 @@ function partFrom(event: SessionEvent): MessagePart | null {
       id: event.partId,
       sessionID: event.sessionId,
       messageID: event.messageId,
-      tool: typeof raw.tool === 'string' ? raw.tool : typeof raw.name === 'string' ? raw.name : 'tool',
+      tool: typeof raw.tool === 'string' ? raw.tool : typeof raw.name === 'string' ? raw.name : '',
     };
     if (typeof raw.callID === 'string') part.callID = raw.callID;
     if (typeof raw.state === 'object' && raw.state !== null) {

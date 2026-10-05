@@ -31,6 +31,32 @@ function firstString(source: Record<string, unknown>, keys: string[]): string | 
   return null;
 }
 
+function inferToolName(input: Record<string, unknown>): string {
+  if (typeof input.command === 'string' || typeof input.cmd === 'string') return 'shell';
+  if (typeof input.query === 'string') return 'websearch';
+  if (typeof input.url === 'string') return 'webfetch';
+  if (Array.isArray(input.questions)) return 'question';
+
+  const hasPath = typeof input.path === 'string' || typeof input.filePath === 'string';
+  const hasEdit = typeof input.oldString === 'string' || typeof input.newString === 'string' || input.replaceAll === true;
+  if (hasPath && hasEdit) return 'edit';
+  if (typeof input.filePath === 'string' && typeof input.content === 'string') return 'write';
+  if (hasPath) return 'read';
+
+  if (typeof input.pattern === 'string') {
+    if (
+      typeof input.include === 'string' ||
+      typeof input.caseSensitive === 'boolean' ||
+      typeof input.literal === 'boolean'
+    ) {
+      return 'grep';
+    }
+    return 'glob';
+  }
+
+  return '';
+}
+
 export interface SessionEvent {
   sessionId: string;
   messageId: string;
@@ -113,8 +139,8 @@ export function toSessionEvent(event: OcEvent): SessionEvent | null {
     const callID = firstString(data, ['id', 'callID', 'callId']);
     if (!sessionId || !messageId || !callID) return null;
 
-    const name = firstString(data, ['name', 'tool']) ?? 'tool';
     const input = asRecord(data.input);
+    const name = firstString(data, ['name', 'tool']) ?? inferToolName(input);
     const metadata = asRecord(data.metadata);
     const content = Array.isArray(data.content) ? data.content : [];
     const output = content
@@ -166,6 +192,7 @@ export function toSessionEvent(event: OcEvent): SessionEvent | null {
           parsedInput = input;
         }
       }
+      const inferredName = name || inferToolName(parsedInput);
       return {
         sessionId,
         messageId,
@@ -174,7 +201,7 @@ export function toSessionEvent(event: OcEvent): SessionEvent | null {
           type: 'tool',
           id: callID,
           callID,
-          tool: name,
+          tool: inferredName,
           state: { status: 'running', input: parsedInput },
         },
         type: event.type,

@@ -130,4 +130,39 @@ describe('capability reads are scoped to a session', () => {
     expect(response.messages.map((message) => message.info.role)).toEqual(['user', 'assistant']);
     expect(response.messages[1].info.finish).toBe('stop');
   });
+
+  it('infers a tool name from input when tool name is missing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        void input;
+        return Promise.resolve(
+          json({
+            data: [
+              {
+                id: 'm1',
+                type: 'assistant',
+                time: { created: 1 },
+                content: [
+                  {
+                    type: 'tool',
+                    id: 'call_1',
+                    state: {
+                      status: 'completed',
+                      input: { command: 'pwd' },
+                      content: [{ type: 'text', text: '/workspace' }],
+                    },
+                  },
+                ],
+              },
+            ],
+          }),
+        );
+      }),
+    );
+
+    const response = await listMessages('ses_abc');
+
+    expect(response.messages[0].parts[0]).toMatchObject({ type: 'tool', tool: 'shell' });
+  });
 });
