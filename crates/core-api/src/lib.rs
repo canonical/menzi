@@ -40,6 +40,29 @@ fn application_routes() -> Router<PgPool> {
         )
         .route("/api/v1/projects/{id}", get(modules::projects::get_project))
         .route(
+            "/api/v1/projects/{project_id}/development-scripts",
+            get(modules::development_scripts::list_development_scripts)
+                .post(modules::development_scripts::create_development_script),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/development-scripts/{script_id}",
+            axum::routing::put(modules::development_scripts::update_development_script)
+                .delete(modules::development_scripts::delete_development_script),
+        )
+        .route(
+            "/api/v1/me/ssh-keys",
+            get(modules::ssh_keys::list_user_ssh_keys).post(modules::ssh_keys::create_user_ssh_key),
+        )
+        .route(
+            "/api/v1/me/ssh-keys/generate",
+            post(modules::ssh_keys::generate_user_ssh_key),
+        )
+        .route(
+            "/api/v1/me/ssh-keys/{id}",
+            axum::routing::patch(modules::ssh_keys::update_user_ssh_key)
+                .delete(modules::ssh_keys::delete_user_ssh_key),
+        )
+        .route(
             "/api/v1/projects/{project_id}/previews",
             get(modules::previews_proxy::forward_previews),
         )
