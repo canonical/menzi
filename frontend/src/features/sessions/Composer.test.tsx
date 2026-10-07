@@ -42,7 +42,7 @@ describe('Composer', () => {
     await userEvent.type(input, 'do the thing');
     expect(input).toHaveValue('do the thing');
 
-    await userEvent.click(screen.getByRole('button'));
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(input).toHaveValue(''));
@@ -59,7 +59,7 @@ describe('Composer', () => {
     const input = screen.getByLabelText('Message');
 
     await userEvent.type(input, 'long running turn');
-    await userEvent.click(screen.getByRole('button'));
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(input).toHaveValue(''));
     expect(sendPrompt).toHaveBeenCalledTimes(1);
@@ -76,7 +76,7 @@ describe('Composer', () => {
     const { client } = renderComposer();
 
     await userEvent.type(screen.getByLabelText('Message'), 'show now');
-    await userEvent.click(screen.getByRole('button'));
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => {
       const cached = client.getQueryData<{ messages: Array<{ info: { role: string }; parts: Array<{ type: string; text?: string }> }> }>(
@@ -96,7 +96,7 @@ describe('Composer', () => {
     const { client } = renderComposer();
 
     await userEvent.type(screen.getByLabelText('Message'), 'transient');
-    await userEvent.click(screen.getByRole('button'));
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(1));
     await waitFor(() => {
@@ -116,7 +116,7 @@ describe('Composer', () => {
     const input = screen.getByLabelText('Message');
 
     await userEvent.type(input, 'keep me');
-    await userEvent.click(screen.getByRole('button'));
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(input).toHaveValue('keep me'));
@@ -128,7 +128,7 @@ describe('Composer', () => {
     const input = screen.getByLabelText('Message');
 
     await userEvent.type(input, '  hello  ');
-    await userEvent.click(screen.getByRole('button'));
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() =>
       expect(sendPrompt).toHaveBeenCalledWith(
@@ -143,9 +143,85 @@ describe('Composer', () => {
     const input = screen.getByLabelText('Message');
 
     await userEvent.type(input, '  spaced  ');
-    await userEvent.click(screen.getByRole('button'));
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(input).toHaveValue('spaced'));
+  });
+
+  it('sends the selected model and provider', async () => {
+    sendPrompt.mockResolvedValue({ info: { id: 'msg_1' }, parts: [] });
+    listModels.mockResolvedValue([
+      { id: 'sonnet-4', providerID: 'anthropic', name: 'Claude Sonnet 4' },
+      { id: 'gpt-5.3', providerID: 'openai', name: 'GPT-5.3' },
+    ]);
+    renderComposer();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Model' }));
+    await userEvent.click(await screen.findByRole('option', { name: /GPT-5.3/i }));
+    await userEvent.type(screen.getByLabelText('Message'), 'choose model');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() =>
+      expect(sendPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'ses_1',
+          text: 'choose model',
+          modelId: 'gpt-5.3',
+          modelProvider: 'openai',
+        }),
+      ),
+    );
+  });
+
+  it('uses the only available model automatically', async () => {
+    sendPrompt.mockResolvedValue({ info: { id: 'msg_1' }, parts: [] });
+    listModels.mockResolvedValue([{ id: 'space-bunny-free', providerID: 'opencode' }]);
+    renderComposer();
+
+    await userEvent.type(screen.getByLabelText('Message'), 'auto model');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() =>
+      expect(sendPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'ses_1',
+          text: 'auto model',
+          modelId: 'space-bunny-free',
+          modelProvider: 'opencode',
+        }),
+      ),
+    );
+  });
+
+  it('places the model selector between message input and send button', async () => {
+    listModels.mockResolvedValue([{ id: 'space-bunny-free', providerID: 'opencode' }]);
+    renderComposer();
+
+    const row = document.querySelector('.app-composer__row');
+    const input = await screen.findByLabelText('Message');
+    const model = await screen.findByRole('button', { name: 'Model' });
+    const send = screen.getByRole('button', { name: 'Send' });
+
+    expect(row).not.toBeNull();
+    expect(row).toContainElement(input);
+    expect(row).toContainElement(model);
+    expect(row).toContainElement(send);
+    expect(input.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(model.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('filters available models with search', async () => {
+    listModels.mockResolvedValue([
+      { id: 'sonnet-4', providerID: 'anthropic', name: 'Claude Sonnet 4' },
+      { id: 'gpt-5.3', providerID: 'openai', name: 'GPT-5.3' },
+    ]);
+    renderComposer();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Model' }));
+    await userEvent.type(screen.getByLabelText('Search models'), 'claude');
+
+    expect(screen.getByRole('option', { name: /Claude Sonnet 4/i })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /GPT-5.3/i })).toBeNull();
   });
 
   it('asks for the models and agents of the session it is in', async () => {
@@ -157,7 +233,7 @@ describe('Composer', () => {
 
   it('does not send an empty message', async () => {
     renderComposer();
-    await userEvent.click(screen.getByRole('button'));
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
     expect(sendPrompt).not.toHaveBeenCalled();
   });
 });
