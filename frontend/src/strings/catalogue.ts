@@ -370,6 +370,10 @@ export const S = {
   chat: {
     title: 'Conversation',
     label: 'Message',
+    model: 'Model',
+    modelAuto: 'Automatic',
+    modelSearch: 'Search models',
+    modelEmpty: 'No models found.',
     placeholder: 'Ask the agent to change the code',
     send: 'Send',
     sending: 'Sending',
